@@ -90,17 +90,21 @@ from PyQt5.QtWidgets import (
 )
 from unidecode import unidecode
 
-from api_keys import API_KEY_GURU, FRETEBARATO_URL, OPENAI_API_KEY, SHOP_URL, SHOPIFY_TOKEN
 from common.cli_safe import safe_cli
-from common.errors import UserError
+from common.errors import ExternalError, UserError
+from common.http_client import http_get, http_post
 from common.logging_setup import correlation_id_ctx, set_correlation_id, setup_logging
+from common.settings import settings
 from common.validation import ensure_paths, validate_config
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 BASE_URL_GURU = "https://digitalmanager.guru/api/v2"
-HEADERS_GURU = {"Authorization": f"Bearer {API_KEY_GURU}", "Content-Type": "application/json"}
+HEADERS_GURU = {
+    "Authorization": f"Bearer {settings.API_KEY_GURU}",
+    "Content-Type": "application/json",
+}
 
 # ===================== CONFIGURAÇÕES =====================
 
@@ -308,7 +312,7 @@ def buscar_todos_produtos_guru():
             if cursor:
                 params["cursor"] = cursor
 
-            r = requests.get(url, headers=headers, params=params, timeout=10)
+            r = http_get(url, headers=headers, params=params, timeout=10)
             if r.status_code != 200:
                 print(f"[❌ Guru] Erro {r.status_code} ao buscar produtos: {r.text}")
                 break
@@ -1220,7 +1224,7 @@ def buscar_ofertas_do_produto(product_id):
             if cursor:
                 params["cursor"] = cursor
 
-            r = requests.get(url, headers=headers, params=params, timeout=10)
+            r = http_get(url, headers=headers, params=params, timeout=10)
             if r.status_code != 200:
                 print(
                     f"[❌ Guru] Erro {r.status_code} ao buscar ofertas do produto {product_id}: {r.text}"
@@ -1273,9 +1277,7 @@ def obter_api_shopify_version():
 
 
 API_VERSION = obter_api_shopify_version()
-GRAPHQL_URL = f"https://{SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
-
-
+GRAPHQL_URL = f"https://{settings.SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
 estado.setdefault("dados_temp", {})
 estado["dados_temp"].setdefault("cpfs", {})
 estado["dados_temp"].setdefault("bairros", {})
@@ -1287,7 +1289,7 @@ MIN_INTERVALO_GRAPHQL = 0.1  # 100ms (100 chamadas/s)
 
 # API OPENAI
 
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 # Gerenciamento de barra de progresso na interface.
@@ -1703,7 +1705,7 @@ def requisicao_com_retry(
                     time.sleep(0.2 - decorrido)
                 controle_rate_limit["ultimo_acesso"] = time.time()
 
-            resposta = requests.get(url, headers=headers, params=params, timeout=6)
+            resposta = http_get(url, headers=headers, params=params, timeout=6)
             ultima_resposta = resposta
 
             if resposta.status_code == 200:
@@ -4973,7 +4975,10 @@ class ObterCpfShopifyRunnable(QRunnable):
                 """
             }
 
-            headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": SHOPIFY_TOKEN}
+            headers = {
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
+            }
 
             with controle_shopify["lock"]:
                 delta = time.time() - controle_shopify["ultimo_acesso"]
@@ -5076,7 +5081,10 @@ class FulfillPedidoRunnable(QRunnable):
             }
             """
 
-            headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": SHOPIFY_TOKEN}
+            headers = {
+                "Content-Type": "application/json",
+                "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
+            }
 
             with controle_shopify["lock"]:
                 delta = time.time() - controle_shopify["ultimo_acesso"]
@@ -5632,7 +5640,10 @@ class BuscarPedidosPagosRunnable(QRunnable):
         }
         """
 
-        headers = {"Content-Type": "application/json", "X-Shopify-Access-Token": SHOPIFY_TOKEN}
+        headers = {
+            "Content-Type": "application/json",
+            "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
+        }
 
         while True:
             if self.estado["cancelador_global"].is_set():
@@ -7103,14 +7114,14 @@ def mapear_skus_com_produtos_shopify(skus_info):
 
 def buscar_todos_produtos_shopify():
     api_version = obter_api_shopify_version()
-    url = f"https://{SHOP_URL}/admin/api/{api_version}/products.json?limit=250"
-    headers = {"X-Shopify-Access-Token": SHOPIFY_TOKEN, "Content-Type": "application/json"}
+    url = f"https://{settings.SHOP_URL}/admin/api/{api_version}/products.json?limit=250"
+    headers = {"X-Shopify-Access-Token": settings.SHOPIFY_TOKEN, "Content-Type": "application/json"}
 
     todos = []
     pagina_atual = 1
 
     while url:
-        resp = requests.get(url, headers=headers, verify=False)
+        resp = http_get(url, headers=headers, verify=False)
         if resp.status_code != 200:
             print(f"❌ Erro Shopify {resp.status_code}: {resp.text}")
             break
@@ -7471,33 +7482,20 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
         # 5) cotação (API/formatos já corretos segundo seu ambiente)
         payload = gerar_payload_fretebarato(cep, total, peso)
 
-        r = None
-        max_tentativas = 3
-        for tentativa in range(1, max_tentativas + 1):
-            try:
-                r = requests.post(
-                    FRETEBARATO_URL,
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
-                    timeout=10,
-                )
-                if r.status_code == 200:
-                    break
-                else:
-                    print(f"[❌] Lote {lote_id} — Tentativa {tentativa}: Erro HTTP {r.status_code}")
-            except requests.RequestException as e:
-                print(f"[❌] Lote {lote_id} — Tentativa {tentativa}: Erro de conexão: {e}")
-
-            if tentativa < max_tentativas:
-                time.sleep(2 ** (tentativa - 1))
-            else:
-                return None
-
-        if r is None:
-            print(f"[❌] Lote {lote_id}: requisição não realizada.")
+        # 💡 Substituição: http_post com retries/backoff e respeito a 429/5xx
+        try:
+            r = http_post(
+                settings.FRETEBARATO_URL,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=(5, 30),  # mesmo padrão do DEFAULT_TIMEOUT
+            )
+        except ExternalError as e:
+            print(
+                f"[❌] Lote {lote_id}: falha ao chamar FreteBarato ({e.code}) — retryable={e.retryable}"
+            )
             return None
 
-        # Observação: você disse que os campos/formatos da API estão corretos; só usamos.
         data = r.json()
         quotes = data.get("quotes", []) or []
         print(f"[📦] Lote {lote_id} — {len(quotes)} cotações recebidas")

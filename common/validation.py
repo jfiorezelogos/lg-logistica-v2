@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError
+from pydantic.functional_validators import field_validator
 
 from .errors import UserError
 
