@@ -1,0 +1,13 @@
+urllib3==2.4.0
+certifi==2025.4.26
+fpdf==1.7.2
+python-dateutil==2.9.0.post0
+openai==1.82.0
+brazilcep==7.0.0
+reportlab==4.4.1
+colorama==0.4.6
+pandas==2.2.3
+requests==2.32.3
+PyQt5==5.15.11
+Unidecode==1.4.0
+

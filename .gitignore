@@ -1,0 +1,26 @@
+# Ambientes virtuais Python
+venv/
+.env/
+ENV/
+.venv/
+
+# Cache de bytecode e arquivos temporários
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Arquivos de urls, tokens e chaves de API
+api_keys.py
+
+# Log
+sistema.log
+
+# Build e distribuição
+dist/
+build/
+
+# Caches de ferramentas
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage

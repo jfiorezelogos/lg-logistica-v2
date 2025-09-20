@@ -1,0 +1,6 @@
+{
+  "input_path": "dados.csv",
+  "output_dir": "out",
+  "max_rows": 1000,
+  "dry_run": true
+}
