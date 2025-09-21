@@ -21,4 +21,5 @@ class Settings(BaseSettings):
     )
 
 
-settings = Settings()
+# mypy não entende carregamento via .env; ignore só nesta chamada
+settings: Settings = Settings()  # type: ignore[call-arg]

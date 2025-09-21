@@ -5,10 +5,11 @@ import logging
 import os
 import re
 import sys
-import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable  # ✅ agora traz Callable
 from contextvars import ContextVar
+from time import gmtime, struct_time
+from typing import cast
 
 from pythonjsonlogger import jsonlogger
 
@@ -70,14 +71,14 @@ class ContextFilter(logging.Filter):
 # Formatter JSON (UTC, ISO-8601)
 # ---------------------------
 class UtcJsonFormatter(jsonlogger.JsonFormatter):
-    # força timestamps em UTC (ISO-8601)
-    converter = time.gmtime
+    converter: Callable[[float | None], struct_time] = cast(
+        Callable[[float | None], struct_time], gmtime
+    )
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("timestamp", True)
         kwargs.setdefault("json_ensure_ascii", False)
         kwargs.setdefault("json_indent", None)
-        # rename padrão
         kwargs.setdefault(
             "rename_fields", {"asctime": "ts", "levelname": "level", "message": "msg"}
         )
@@ -85,7 +86,6 @@ class UtcJsonFormatter(jsonlogger.JsonFormatter):
 
     def add_fields(self, log_record, record, message_dict):
         super().add_fields(log_record, record, message_dict)
-        # ISO 8601 com 'Z'
         if (
             "ts" in log_record
             and isinstance(log_record["ts"], str)

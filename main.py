@@ -7259,15 +7259,17 @@ def aplicar_lotes(
 
     # Fallbacks da chave
     mask_vazia = emails.eq("") & cpfs.eq("") & ceps.eq("")
-    if mask_vazia.any():
-        df_resultado.loc[mask_vazia, "chave_lote"] = (
-            df_resultado.loc[mask_vazia, "transaction_id"].astype(str).str.strip()
-        )
-        mask_ainda_vazia = df_resultado["chave_lote"].eq("")
-        if mask_ainda_vazia.any():
-            df_resultado.loc[mask_ainda_vazia, "chave_lote"] = df_resultado.loc[
-                mask_ainda_vazia
-            ].index.astype(str)
+
+    # se email/cpf/cep estão vazios → tenta usar transaction_id
+    df_resultado.loc[mask_vazia, "chave_lote"] = (
+        df_resultado.loc[mask_vazia, "transaction_id"].astype(str).str.strip()
+    )
+
+    # se ainda assim chave ficou vazia (ex.: transaction_id também faltando), usa o índice
+    mask_ainda_vazia = df_resultado["chave_lote"].eq("")
+    df_resultado.loc[mask_ainda_vazia, "chave_lote"] = (
+        df_resultado.loc[mask_ainda_vazia].index.astype(str).to_list()
+    )
 
     if df_resultado.empty:
         print("\n[✅] Nenhum item válido para lote/cotação após remoção dos indisponíveis.\n")
@@ -7977,9 +7979,11 @@ def salvar_planilha_final(df: pd.DataFrame, output_path: str) -> None:
         df_final.sort_values(by=["Transportadora", "Conjunto Produtos"], inplace=True)
 
     # Numeração por lote (se houver)
+
     if "ID Lote" in df_final.columns:
+        parent = QApplication.activeWindow() or QWidget()
         numero_inicial, ok = QInputDialog.getInt(
-            None, "Número Inicial", "Informe o número inicial do pedido:", value=8000, min=1
+            parent, "Número Inicial", "Informe o número inicial do pedido:", value=8000, min=1
         )
         if not ok:
             return
@@ -7991,7 +7995,8 @@ def salvar_planilha_final(df: pd.DataFrame, output_path: str) -> None:
             .sort_values(by=["Transportadora", "Conjunto Produtos"])
             .reset_index(drop=True)
         )
-        mapa_lotes = {row["ID Lote"]: numero_inicial + i for i, row in lotes_ordenados.iterrows()}
+        unique_lotes = lotes_ordenados["ID Lote"].tolist()
+        mapa_lotes = {lote: numero_inicial + i for i, lote in enumerate(unique_lotes)}
         df_final["Número pedido"] = df_final["ID Lote"].map(mapa_lotes)
     else:
         df_final["Número pedido"] = ""
@@ -8001,10 +8006,8 @@ def salvar_planilha_final(df: pd.DataFrame, output_path: str) -> None:
     df_final["Valor Total"] = pd.to_numeric(df_final["Valor Total"], errors="coerce")
 
     if df_final["Número pedido"].notna().any():
-        total_por_pedido = (
-            df_final.groupby("Número pedido", as_index=False)["Valor Total"]
-            .sum()
-            .rename(columns={"Valor Total": "Total Pedido"})
+        total_por_pedido = df_final.groupby("Número pedido", sort=False, as_index=False).agg(
+            **{"Total Pedido": ("Valor Total", "sum")}
         )
         if "Total Pedido" in df_final.columns:
             df_final.drop(columns=["Total Pedido"], inplace=True)
