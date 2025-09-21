@@ -24,6 +24,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from functools import partial
 from json import JSONDecodeError
 from threading import Event
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 import certifi
@@ -256,7 +257,7 @@ if not logger.handlers:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-dados = {}
+dados: dict[str, Any] = {}
 estado = {
     "transacoes_obtidas": False,
     "linhas_planilha": [],
@@ -264,18 +265,18 @@ estado = {
     "skus_info": {},
     "cancelador_global": threading.Event(),
 }
-linhas_planilha = []
+linhas_planilha: list[dict[str, Any]] = []
 total_etapas = 0
 progresso_total = 0
 transacoes_obtidas = False
-transportadoras_var = {}
+transportadoras_var: dict[str, Any] = {}
 transportadoras_lista = ["CORREIOS", "GFL", "GOL", "JET", "LOG"]
 skus_path = os.path.join(caminho_base(), "skus.json")
 janela_progresso = None
 texto_label = None
 barra_progresso = None
-transacoes = []
-enderecos_para_revisar = []  # ← Lista global
+transacoes: list[dict[str, Any]] = []
+enderecos_para_revisar: list[dict[str, Any]] = []
 
 # Inicializa o dicionário de SKUs a partir de arquivo JSON.
 
@@ -536,8 +537,8 @@ def obter_ids_assinaturas_por_duracao(skus_info):
     # mapa auxiliar: guru_id -> {"recorrencia":..., "periodicidade":...}
     guru_meta = {}
 
-    for info in skus_info.items():
-        if info.get("tipo") == "assinatura":
+    for _nome, info in skus_info.items():
+        if (info.get("tipo") or "").lower() == "assinatura":
             ids = info.get("guru_ids", [])
             dur = (info.get("recorrencia") or "").lower()
             per = (info.get("periodicidade") or "").lower()
@@ -1275,10 +1276,19 @@ def obter_api_shopify_version():
 
 API_VERSION = obter_api_shopify_version()
 GRAPHQL_URL = f"https://{settings.SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
-estado.setdefault("dados_temp", {})
-estado["dados_temp"].setdefault("cpfs", {})
-estado["dados_temp"].setdefault("bairros", {})
-estado["dados_temp"].setdefault("enderecos", {})
+
+
+class _DadosTemp(TypedDict, total=False):
+    cpfs: dict[str, Any]
+    bairros: dict[str, Any]
+    enderecos: dict[str, Any]
+
+
+# Inicializa/garante o tipo de estado["dados_temp"] apenas aqui
+dt = cast(_DadosTemp, estado.setdefault("dados_temp", {}))
+dt.setdefault("cpfs", {})
+dt.setdefault("bairros", {})
+dt.setdefault("enderecos", {})
 
 # Controle de taxa global
 controle_shopify = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
@@ -1994,15 +2004,14 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
     - Converte TUDO para datetime naive antes de comparar.
     - Logs defensivos sem referenciar variáveis ainda não definidas.
     """
-    from datetime import datetime
 
-    def _naive(dt):
+    def _naive(dt: datetime) -> datetime:
         try:
             return dt.replace(tzinfo=None)
         except Exception:
             return dt
 
-    def _to_dt(val):
+    def _to_dt(val: object) -> datetime | None:
         """Converte val -> datetime naive (aceita datetime/ISO/timestamp s|ms/QDateTime)."""
         if val is None:
             return None
@@ -2018,7 +2027,7 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
                 return None
         if isinstance(val, str):
             try:
-                dt = parse_date(val)
+                dt = parse_date(val)  # <- mantém a chamada; só tipamos a função
                 return _naive(dt)
             except Exception:
                 return None
@@ -2033,7 +2042,7 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
         if not isinstance(dados, dict):
             return False
 
-        modo_local = (dados.get("modo") or dados.get("modo_busca") or "").strip().lower()
+        modo_local = (str(dados.get("modo") or dados.get("modo_busca") or "")).strip().lower()
         if modo_local == "produtos":
             return False
 
@@ -2049,24 +2058,30 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
 
         # 2) deriva via ano/mês/periodicidade, se necessário
         if ini is None or end is None:
-            ano = dados.get("ano")
-            mes = dados.get("mes")
-            periodicidade = (dados.get("periodicidade") or "bimestral").strip().lower()
+            ano_s = dados.get("ano")
+            mes_s = dados.get("mes")
+            periodicidade = (str(dados.get("periodicidade") or "bimestral")).strip().lower()
+
+            # evita Any|None chegando no int(...)
+            if ano_s is None or mes_s is None:
+                print(f"[DEBUG dentro_periodo] sem contexto suficiente (ano={ano_s}, mes={mes_s})")
+                return False
 
             try:
-                ano_i = int(ano)
-                mes_i = int(mes)
+                ano_i = int(ano_s)
+                mes_i = int(mes_s)
             except Exception:
-                print(f"[DEBUG dentro_periodo] sem contexto suficiente (ano={ano}, mes={mes})")
+                print(f"[DEBUG dentro_periodo] sem contexto suficiente (ano={ano_s}, mes={mes_s})")
                 return False
 
             try:
                 ini_calc, end_calc, _ = bounds_do_periodo(ano_i, mes_i, periodicidade)
-                ini = _to_dt(ini_calc)
-                end = _to_dt(end_calc)
             except Exception as e:
                 print(f"[DEBUG janela-skip] bounds_do_periodo erro: {e}")
                 return False
+
+            ini = _to_dt(ini_calc)
+            end = _to_dt(end_calc)
 
         if ini is None or end is None:
             print(f"[DEBUG dentro_periodo] janela inválida ini={ini!r} end={end!r}")
@@ -2121,6 +2136,7 @@ def iniciar_busca_assinaturas(
     mes,
     modo_periodo,
     box_nome_input,
+    _transportadoras_var,
     estado,
     skus_info,
     *,
@@ -2204,10 +2220,12 @@ def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel
         "mensal": "mensais",
     }
 
-    ids_por_tipo = {k: [] for k in ["anuais", "bianuais", "trianuais", "bimestrais", "mensais"]}
+    ids_por_tipo: dict[str, list[str]] = {
+        k: [] for k in ["anuais", "bianuais", "trianuais", "bimestrais", "mensais"]
+    }
     todos = set()
 
-    for info in (skus_info or {}).items():
+    for _nome, info in (skus_info or {}).items():
         if (info.get("tipo") or "").lower() != "assinatura":
             continue
         if (info.get("periodicidade") or "").lower() != periodicidade_sel:
@@ -2748,7 +2766,7 @@ def eh_indisponivel(produto_nome: str) -> bool:
     if not produto_nome:
         return False
 
-    skus = estado.get("skus_info") or {}
+    skus = cast(dict[str, dict[str, Any]], estado.get("skus_info") or {})
     info = skus.get(produto_nome)
 
     # fallback por normalização de nome (sem acento/caixa) caso a chave não bata 1:1
@@ -3373,7 +3391,9 @@ def _norm(s: str) -> str:
     return unidecode((s or "").strip().lower())
 
 
-def aplicar_regras_transaction(transacao: dict, dados: dict, base_produto_principal: str):
+def aplicar_regras_transaction(
+    transacao: dict, dados: dict, _skus_info: dict, base_produto_principal: str
+):
     """
     Lê config_ofertas.json e aplica:
       - override da box (action.type == 'alterar_box')
@@ -3385,7 +3405,7 @@ def aplicar_regras_transaction(transacao: dict, dados: dict, base_produto_princi
     regras = obter_regras_config() or []
     res_override = None
     res_override_score = -1
-    brindes = []
+    brindes: list[dict[str, Any] | str] = []
 
     # --- contexto da transação ---
     payment = transacao.get("payment") or {}
@@ -3497,7 +3517,13 @@ def aplicar_regras_transaction(transacao: dict, dados: dict, base_produto_princi
     uniq = []
     seen = set()
     for b in brindes:
-        nb = (b or "").strip()
+        if isinstance(b, dict):
+            nb = str(b.get("nome", "")).strip()
+        elif isinstance(b, str):
+            nb = b.strip()
+        else:
+            nb = str(b or "").strip()
+
         if not nb:
             continue
         nbn = _norm(nb)
@@ -7254,76 +7280,69 @@ def aplicar_lotes(
     status = estado.get("dados_temp", {}).get("status_fulfillment", {}) if estado else {}
     descontos = estado.get("dados_temp", {}).get("descontos", {}) if estado else {}
 
-    aplicar_frete = bool(fretes) and bool(status)
-    aplicar_desconto = bool(descontos) and bool(status)
-
-    # Garante colunas de saída
-    if aplicar_frete and "Valor Frete Pedido" not in df_resultado.columns:
+    # Garante colunas de saída (vamos escrever os totais do lote nelas)
+    if "Valor Frete Pedido" not in df_resultado.columns:
         df_resultado["Valor Frete Pedido"] = ""
-    if aplicar_desconto and "Valor Desconto Pedido" not in df_resultado.columns:
+    if "Valor Desconto Pedido" not in df_resultado.columns:
         df_resultado["Valor Desconto Pedido"] = ""
-    # (opcional) totais do lote
     if "Valor Frete Lote" not in df_resultado.columns:
         df_resultado["Valor Frete Lote"] = ""
     if "Valor Desconto Lote" not in df_resultado.columns:
         df_resultado["Valor Desconto Lote"] = ""
 
+    # Evita cast repetido em loop
+    df_resultado["transaction_id_str"] = df_resultado["transaction_id"].astype(str)
+
     lote_atual = lote_inicial
-    for grupo in agrupado:
-        indices = grupo.index.tolist()
+
+    # iterar desempacotando (chave, subdf)
+    for _chave, subdf in agrupado:
+        indices = list(subdf.index)
         id_lote_str = f"L{lote_atual:04d}"
         df_resultado.loc[indices, "ID Lote"] = id_lote_str
 
-        if "transaction_id" in grupo.columns:
-            pedidos_do_lote = grupo["transaction_id"].astype(str).unique()
-            frete_total = 0.0
-            desconto_total = 0.0
+        # Calcula os totais do lote somando por pedido (partials viram 0)
+        pedidos_do_lote = subdf["transaction_id_str"].unique()
+        frete_total = 0.0
+        desconto_total = 0.0
 
-            for pid in pedidos_do_lote:
-                pid_norm = normalizar_transaction_id(pid)
-                status_atual = (status.get(pid_norm, "") or "").upper()
-                is_partial = status_atual == "PARTIALLY_FULFILLED"
+        for pid in pedidos_do_lote:
+            pid_norm = normalizar_transaction_id(pid)
+            status_atual = (status.get(pid_norm, "") or "").upper()
+            is_partial = status_atual == "PARTIALLY_FULFILLED"
 
-                # valor por pedido: partial vira 0
-                frete_val = 0.0 if is_partial else float(fretes.get(pid_norm, 0.0) or 0.0)
-                desc_val = 0.0 if is_partial else float(descontos.get(pid_norm, 0.0) or 0.0)
+            frete_val = 0.0 if is_partial else float(fretes.get(pid_norm, 0.0) or 0.0)
+            desc_val = 0.0 if is_partial else float(descontos.get(pid_norm, 0.0) or 0.0)
 
-                # acumula total do lote (partial entra como 0, como você quer)
-                frete_total += frete_val
-                desconto_total += desc_val
-
-                # grava por LINHA desse pedido no lote
-                idx_pid = grupo.index[grupo["transaction_id"].astype(str) == pid]
-                if aplicar_frete:
-                    df_resultado.loc[idx_pid, "Valor Frete Pedido"] = (
-                        "0,00" if is_partial else f"{frete_val:.2f}".replace(".", ",")
-                    )
-                if aplicar_desconto:
-                    df_resultado.loc[idx_pid, "Valor Desconto Pedido"] = (
-                        "0,00" if is_partial else f"{desc_val:.2f}".replace(".", ",")
-                    )
-
-                print(
-                    f"[🧾] Pedido {pid_norm} | Status: {status_atual} | Frete usado: {frete_val} | Desconto usado: {desc_val}"
-                )
-
-            # (opcional) replica o total do lote em todas as linhas do lote
-            df_resultado.loc[indices, "Valor Frete Lote"] = f"{frete_total:.2f}".replace(".", ",")
-            df_resultado.loc[indices, "Valor Desconto Lote"] = f"{desconto_total:.2f}".replace(
-                ".", ","
-            )
+            frete_total += frete_val
+            desconto_total += desc_val
 
             print(
-                f"🔸 {id_lote_str} → {len(indices)} item(ns) | Frete total LOTE: R$ {frete_total:.2f} | Desconto total LOTE: R$ {desconto_total:.2f}"
+                f"[🧾] Pedido {pid_norm} | Status: {status_atual} | Frete usado: {frete_val} | Desconto usado: {desc_val}"
             )
-        else:
-            print(f"🔸 {id_lote_str} → {len(indices)} item(ns)")
 
+        # 🔁 APLICA o TOTAL DO LOTE nas colunas *Pedido* (substitui valores anteriores)
+        df_resultado.loc[indices, "Valor Frete Pedido"] = f"{frete_total:.2f}".replace(".", ",")
+        df_resultado.loc[indices, "Valor Desconto Pedido"] = f"{desconto_total:.2f}".replace(
+            ".", ","
+        )
+
+        # (opcional) mantém colunas de lote em sincronia
+        df_resultado.loc[indices, "Valor Frete Lote"] = f"{frete_total:.2f}".replace(".", ",")
+        df_resultado.loc[indices, "Valor Desconto Lote"] = f"{desconto_total:.2f}".replace(".", ",")
+
+        print(
+            f"🔸 {id_lote_str} → {len(indices)} item(ns) | Frete total LOTE: R$ {frete_total:.2f} | Desconto total LOTE: R$ {desconto_total:.2f}"
+        )
         lote_atual += 1
 
     # limpeza
-    df_resultado.drop(columns=["chave_lote"], inplace=True, errors="ignore")
-    print("\n[✅] Todos os lotes atribuídos com base em email + cpf + cep.\n")
+    df_resultado.drop(columns=["chave_lote", "transaction_id_str"], inplace=True, errors="ignore")
+
+    # Se quiser remover as colunas de lote (já que Pedido = Lote), descomente:
+    # df_resultado.drop(columns=["Valor Frete Lote", "Valor Desconto Lote"], inplace=True, errors="ignore")
+
+    print("\n[✅] Todos os lotes atribuídos e totais aplicados nas colunas de Pedido.\n")
     return df_resultado
 
 
@@ -8021,7 +8040,8 @@ def salvar_planilha_final(df: pd.DataFrame, output_path: str) -> None:
         data_envio_str = df_para_pdf["Data"].dropna().iloc[0]
         data_envio = datetime.strptime(data_envio_str, "%d/%m/%Y")
 
-        info = estado.get("ultimo_log", {}) if isinstance(estado, dict) else {}
+        raw_info = estado.get("ultimo_log") if isinstance(estado, dict) else None
+        info = cast(dict[str, Any], raw_info or {})
         periodo = info.get("periodo", info.get("bimestre", 1))
         ano_pdf = info.get("ano", data_envio.year)
         gerar_pdf_resumo_logistica(df_para_pdf, data_envio, periodo, ano_pdf, output_path)
@@ -8978,8 +8998,6 @@ def abrir_interface(estado, skus_info):
     janela.setGeometry(0, 0, largura, altura)
     janela.move(tela.x() - largura // 2, tela.y() - altura // 2)
     estado["janela_principal"] = janela
-
-    transportadoras_var = {}
     estado["cancelador_global"] = (
         estado.get("cancelador_global")
         if isinstance(estado.get("cancelador_global"), threading.Event)

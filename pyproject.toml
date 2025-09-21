@@ -28,6 +28,3 @@ disallow_untyped_defs = false
 follow_imports = "silent"
 namespace_packages = true
 explicit_package_bases = true
-
-# Exclui o main.py por enquanto (voltamos nele com metas graduais)
-exclude = "main\\.py"
