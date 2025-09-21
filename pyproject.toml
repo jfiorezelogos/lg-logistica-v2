@@ -12,16 +12,13 @@ ignore = ["E203", "E501"]  # Black manda na quebra de linha
 
 [tool.ruff.lint.per-file-ignores]
 "main.py" = [
-  "E402",   # imports fora do topo
-  "W291",   # trailing whitespace
   "PLR", "PLW",          # complexidade / branches / statements
   "DTZ",                 # datetime naive
   "RUF001", "RUF003",    # unicode ambíguo
   "RUF013",              # Optional implícito
   "E731", "E741", "B023", "E722",  # lambda atribuída, nomes ruins, except cru
   "ARG001", "B007",      # args/loop-var não usados
-  "UP038",               # isinstance tuple -> X | Y
-  "F841"                 # variáveis atribuídas mas não usadas
+  "UP038"              # isinstance tuple -> X | Y
 ]
 
 [tool.ruff.lint.isort]
