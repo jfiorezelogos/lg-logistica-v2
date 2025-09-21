@@ -15,8 +15,6 @@ ignore = ["E203", "E501"]  # Black manda na quebra de linha
   "PLR", "PLW",          # complexidade / branches / statements
   "DTZ",                 # datetime naive
   "RUF001", "RUF003",    # unicode ambíguo
-  "RUF013",              # Optional implícito
-  "UP038"                # isinstance tuple -> X | Y
 ]
 
 [tool.ruff.lint.isort]

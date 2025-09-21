@@ -2008,7 +2008,7 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
             return None
         if isinstance(val, datetime):
             return _naive(val)
-        if isinstance(val, (int, float)):
+        if isinstance(val, int | float):
             try:
                 v = float(val)
                 if v > 1e12:  # ms -> s
@@ -2856,7 +2856,7 @@ def desmembrar_produto_combo(valores, linha_base, skus_info):
     def _to_dec(v):
         if v is None:
             return Decimal("0.00")
-        if isinstance(v, (int, float)):
+        if isinstance(v, int | float):
             return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         s = str(v).strip()
         # normaliza "1.234,56" -> "1234.56"
@@ -2969,7 +2969,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
     def _to_ts(val):
         if val is None:
             return None
-        if isinstance(val, (int, float)):
+        if isinstance(val, int | float):
             return float(val)
         if isinstance(val, datetime):
             try:
@@ -3515,7 +3515,7 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
     def _to_ts(val):
         if val is None:
             return None
-        if isinstance(val, (int, float)):
+        if isinstance(val, int | float):
             return float(val)
         if isinstance(val, datetime):
             try:
@@ -3875,7 +3875,7 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
                 q = 0
             if q <= 0:
                 continue
-            if isinstance(k, (tuple, list)) and len(k) == 2:
+            if isinstance(k, tuple | list) and len(k) == 2:
                 de, para = k
             else:
                 # tenta separar por seta
@@ -5444,9 +5444,9 @@ class BuscarPedidosPagosRunnable(QRunnable):
         self,
         titulo,
         detalhe=None,
-        exc: Exception = None,
-        resp: requests.Response = None,
-        extra_ctx: dict = None,
+        exc: Exception | None = None,
+        resp: requests.Response | None = None,
+        extra_ctx: dict | None = None,
     ):
         print("\n" + "═" * 80)
         print(f"[❌] {titulo}")
@@ -7189,7 +7189,9 @@ def marcar_itens_como_fulfilled_na_shopify(df):
 # Cotação de fretes
 
 
-def aplicar_lotes(df: pd.DataFrame, estado: dict = None, lote_inicial: int = 1) -> pd.DataFrame:
+def aplicar_lotes(
+    df: pd.DataFrame, estado: dict | None = None, lote_inicial: int = 1
+) -> pd.DataFrame:
     df_resultado = df.copy()
 
     # ✅ Garante as colunas EXATAS usadas aqui (sem alias/canônico)
