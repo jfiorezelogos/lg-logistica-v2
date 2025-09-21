@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  lglog:
+    build: .
+    container_name: lg-log
+    env_file: .env
+    tty: true
+    volumes:
+      - ./:/app   # só use isso em dev; em produção é melhor remover
