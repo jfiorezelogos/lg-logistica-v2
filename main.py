@@ -20,6 +20,7 @@ from calendar import monthrange
 from collections import Counter, OrderedDict, defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from functools import partial
 from json import JSONDecodeError
 from threading import Event
@@ -27,23 +28,14 @@ from uuid import uuid4
 
 import certifi
 import openai
+import pandas as pd
+import requests
 import urllib3
 from brazilcep import exceptions, get_address_from_cep
 from colorama import init
 from dateutil.parser import parse as parse_date
 from fpdf import FPDF
 from openai import RateLimitError
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
-
-init(autoreset=True)
-
-# Imports de terceiros
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-
-import pandas as pd
-import requests
 from PyQt5.QtCore import (
     QCoreApplication,
     QDate,
@@ -88,6 +80,9 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
 from unidecode import unidecode
 
 from common.cli_safe import safe_cli
@@ -96,6 +91,8 @@ from common.http_client import http_get, http_post
 from common.logging_setup import get_correlation_id, set_correlation_id, setup_logging
 from common.settings import settings
 from common.validation import ensure_paths, validate_config
+
+init(autoreset=True)
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
