@@ -963,13 +963,13 @@ class RuleManagerDialog(QDialog):
                 self._offer_index[oid] = o
 
     def _label_produto(self, produto_id: str) -> str:
-        """Exibe marketplace_id — nome; fallback para product_id se faltar."""
+        """Exibe marketplace_id - nome; fallback para product_id se faltar."""
         p = self._prod_index.get(str(produto_id))
         if not p:
             return f"{produto_id or '?'}"
         mkt = p.get("marketplace_id") or p.get("shopify_id") or p.get("marketplaceId")
         nome = p.get("title") or p.get("name") or p.get("nome") or f"Produto {produto_id}"
-        return f"{mkt} — {nome}" if mkt else f"{produto_id} — {nome}"
+        return f"{mkt} - {nome}" if mkt else f"{produto_id} - {nome}"
 
     def _label_oferta(self, oferta_id: str) -> str:
         """Exibe o nome da oferta; fallback para o id."""
@@ -1498,7 +1498,7 @@ class WorkerController(QObject):
 
             worker.finalizado.connect(ao_finalizar_worker)
 
-            # (opcional) fallback extra — pode ser removido se preferir evitar chamadas duplicadas de fechar
+            # (opcional) fallback extra - pode ser removido se preferir evitar chamadas duplicadas de fechar
             # worker.finished.connect(gerenciador.fechar)
 
             worker.start()
@@ -1630,7 +1630,7 @@ class WorkerThread(QThread):
             self.progresso.emit("✅ Finalizado com sucesso", 1, 1)
             self.fechar_ui.emit()
 
-            # aviso agregado de erros — só se for lista e não vazia
+            # aviso agregado de erros - só se for lista e não vazia
             erros = self.estado.get("transacoes_com_erro", [])
             if isinstance(erros, list) and erros:
                 mensagem = (
@@ -3248,7 +3248,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                         estado["brindes_indisp_set"].add(brinde_nome)
                     _append_linha(linha_b, valores["transaction_id"])
 
-                # 📦 embutido por oferta — exige validade + dentro da janela
+                # 📦 embutido por oferta - exige validade + dentro da janela
                 oferta_id = transacao.get("product", {}).get("offer", {}).get("id")
                 oferta_id_clean = str(oferta_id).strip()
                 ofertas_normalizadas = {str(k).strip(): v for k, v in ofertas_embutidas.items()}
@@ -3940,7 +3940,7 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
             cupons = int(dados.get("cupons", 0) or 0)
             resumo += f"  - {label.capitalize()}: {assin} (cupons: {cupons})\n"
 
-        # 🎁 Itens extras (brindes/embutidos) — computa a partir das linhas com valor 0
+        # 🎁 Itens extras (brindes/embutidos) - computa a partir das linhas com valor 0
         extras_ctr = Counter()
         for lin in linhas:
             if not isinstance(lin, dict):
@@ -4589,7 +4589,7 @@ def filtrar_linhas_ja_enviadas():
         )
         return
 
-    # —— cópia de trabalho com nomes normalizados (não toca df_orig) ——
+    # -- cópia de trabalho com nomes normalizados (não toca df_orig) --
     df = df_orig.copy()
     df.columns = df.columns.str.strip()
     df.columns = df.columns.str.lower()
@@ -4673,7 +4673,7 @@ def filtrar_linhas_ja_enviadas():
 
     mask_remover = df.apply(deve_remover, axis=1)
 
-    # —— aplica a máscara no DataFrame ORIGINAL, preservando schema/casos/acentos ——
+    # -- aplica a máscara no DataFrame ORIGINAL, preservando schema/casos/acentos --
     df_filtrado = df_orig.loc[~mask_remover.values].copy()
 
     removidas = linhas_antes - len(df_filtrado)
@@ -5502,7 +5502,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
 
         msg_ui = titulo
         if detalhe:
-            msg_ui += f" — {detalhe}"
+            msg_ui += f" - {detalhe}"
         self.sinais.erro.emit(f"❌ {msg_ui}")
 
     # --- helper: quanto esperar para ter 'needed' créditos disponíveis ---
@@ -5714,7 +5714,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
                     wait_s = self._calc_wait_seconds(self._ultimo_throttle_status, needed)
                     if wait_s <= 0:
                         wait_s = 1.5  # fallback conservador
-                    print(f"⏳ THROTTLED — aguardando {wait_s:.2f}s e tentando novamente...")
+                    print(f"⏳ THROTTLED - aguardando {wait_s:.2f}s e tentando novamente...")
                     time.sleep(wait_s)
                     continue
 
@@ -6145,7 +6145,7 @@ def iniciar_busca_bairros(estado, gerenciador, depois=None):
 def iniciar_normalizacao_enderecos(estado, gerenciador, depois=None):
     # gate idempotente
     if estado.get("_once_iniciar_normalizacao_enderecos"):
-        logger.info("[🧪] Normalização de endereços já iniciada — ignorando repetição.")
+        logger.info("[🧪] Normalização de endereços já iniciada - ignorando repetição.")
         return
     estado["_once_iniciar_normalizacao_enderecos"] = True
 
@@ -6248,13 +6248,13 @@ def ao_finalizar_endereco(pedido_id, endereco_dict, estado, gerenciador, depois_
     # Proteção contra chamadas após finalização
     if estado.get("finalizou_endereco"):
         logger.debug(
-            f"[🛑] Ignorando ao_finalizar_endereco para {pedido_id} — etapa já foi finalizada."
+            f"[🛑] Ignorando ao_finalizar_endereco para {pedido_id} - etapa já foi finalizada."
         )
         return
 
     pedido_id = normalizar_transaction_id(pedido_id)
     logger.info(
-        f"[🧪] ao_finalizar_endereco chamado para {pedido_id} — gerenciador={id(gerenciador)}"
+        f"[🧪] ao_finalizar_endereco chamado para {pedido_id} - gerenciador={id(gerenciador)}"
     )
 
     estado.setdefault("enderecos_normalizados", {})
@@ -6293,7 +6293,7 @@ def ao_finalizar_endereco(pedido_id, endereco_dict, estado, gerenciador, depois_
                 except Exception as e:
                     logger.exception(f"[❌] Erro ao executar `depois()` após normalização: {e}")
         else:
-            logger.debug("[🟡] ao_finalizar_endereco ignorado — etapa já finalizada.")
+            logger.debug("[🟡] ao_finalizar_endereco ignorado - etapa já finalizada.")
 
 
 def endereco_parece_completo(address1: str) -> bool:
@@ -6536,7 +6536,7 @@ def aguardar_e_resetar_pool():
 
     while pool.activeThreadCount() > 0:
         logger.warning(
-            f"[⚠️] Ainda há {pool.activeThreadCount()} threads ativas no pool — aguardando..."
+            f"[⚠️] Ainda há {pool.activeThreadCount()} threads ativas no pool - aguardando..."
         )
         time.sleep(0.5)
         pool.waitForDone(500)
@@ -6594,7 +6594,7 @@ def atualizar_planilha_shopify(estado, gerenciador):
 
     logger.info("[✅] Todos os dados foram coletados. Atualizando a planilha...")
 
-    # —— preenchimentos por pedido (CPF, bairro, endereço) ——
+    # -- preenchimentos por pedido (CPF, bairro, endereço) --
     for pedido_id, cpf in estado.get("dados_temp", {}).get("cpfs", {}).items():
         if encerrar_se_cancelado("Cancelamento durante preenchimento de CPF."):
             return
@@ -6628,7 +6628,7 @@ def atualizar_planilha_shopify(estado, gerenciador):
         if col in df.columns:
             df[col] = df[col].apply(limpar_telefone)
 
-    # —— NOVO: coluna "indisponivel" baseada no skus.json ——
+    # -- NOVO: coluna "indisponivel" baseada no skus.json --
     if "Produto" in df.columns:
         try:
             df["indisponivel"] = df["Produto"].apply(
@@ -6859,7 +6859,7 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
         print(f"[✅] {len(linhas_geradas)} itens adicionados ao df_temp.")
         print(f"[📊] Total atual no df_temp: {len(df_temp)} linhas.")
     else:
-        print("[⚠️] Nenhum item foi adicionado — possivelmente nenhum item corresponde ao filtro.")
+        print("[⚠️] Nenhum item foi adicionado - possivelmente nenhum item corresponde ao filtro.")
 
     logger.info(f"[✅] {len(linhas_geradas)} itens adicionados ao df_temp.")
     logger.info(f"[📊] Total atual no df_temp: {len(estado['df_temp'])} linhas.")
@@ -7213,7 +7213,7 @@ def aplicar_lotes(
     if "SKU" in df_resultado.columns:
         df_resultado["SKU"] = df_resultado["SKU"].astype(str).str.strip().str.upper()
 
-    # —— filtro de itens válidos para lote (indisponivel == "S" fora)
+    # -- filtro de itens válidos para lote (indisponivel == "S" fora)
     mask_validos = ~df_resultado["indisponivel"].astype(str).str.upper().eq("S")
     excluidos = int((~mask_validos).sum())
     if excluidos:
@@ -7462,7 +7462,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
 
         itens = len(linhas_validas)
         print(
-            f"[🔎] Lote {lote_id} — CEP: {cep} | Itens: {itens} | Peso: {peso:.3f} kg | Total: R$ {total:.2f}"
+            f"[🔎] Lote {lote_id} - CEP: {cep} | Itens: {itens} | Peso: {peso:.3f} kg | Total: R$ {total:.2f}"
         )
 
         if total <= 0 or peso <= 0:
@@ -7487,27 +7487,27 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             )
         except ExternalError as e:
             print(
-                f"[❌] Lote {lote_id}: falha ao chamar FreteBarato ({e.code}) — retryable={e.retryable}"
+                f"[❌] Lote {lote_id}: falha ao chamar FreteBarato ({e.code}) - retryable={e.retryable}"
             )
             return None
 
         data = r.json()
         quotes = data.get("quotes", []) or []
-        print(f"[📦] Lote {lote_id} — {len(quotes)} cotações recebidas")
+        print(f"[📦] Lote {lote_id} - {len(quotes)} cotações recebidas")
 
         # filtra por transportadoras selecionadas
         opcoes = [q for q in quotes if str(q.get("name", "")).strip().upper() in nomes_aceitos]
         print(
-            f"[🔎] Lote {lote_id} — {len(opcoes)} compatíveis com selecionadas: {sorted(nomes_aceitos)}"
+            f"[🔎] Lote {lote_id} - {len(opcoes)} compatíveis com selecionadas: {sorted(nomes_aceitos)}"
         )
 
         if not opcoes:
-            print(f"[⚠️] Lote {lote_id} — Nenhum frete aceito pelas transportadoras selecionadas.")
+            print(f"[⚠️] Lote {lote_id} - Nenhum frete aceito pelas transportadoras selecionadas.")
             return None
 
         melhor = sorted(opcoes, key=lambda x: float(x.get("price", 0) or 0))[0]
         print(
-            f"[✅] Lote {lote_id} — Frete: {melhor['name']} ({melhor.get('service','')}) - R$ {float(melhor['price']):.2f}"
+            f"[✅] Lote {lote_id} - Frete: {melhor['name']} ({melhor.get('service','')}) - R$ {float(melhor['price']):.2f}"
         )
         return lote_id, melhor["name"], melhor.get("service", ""), float(melhor["price"])
 
@@ -8063,7 +8063,7 @@ def chave_assinatura(nome: str, periodicidade: str) -> str:
     p = (periodicidade or "").strip().lower()
     if p not in ("mensal", "bimestral"):
         p = "bimestral"  # fallback
-    return f"{nome.strip()} — {p}"
+    return f"{nome.strip()} - {p}"
 
 
 def abrir_editor_skus(box_nome_input=None):
@@ -8211,9 +8211,9 @@ def abrir_editor_skus(box_nome_input=None):
                 row = tabela_assin.rowCount()
                 tabela_assin.insertRow(row)
 
-                nome_base = nome.split(" — ")[0]
+                nome_base = nome.split(" - ")[0]
                 periodicidade = info.get("periodicidade") or (
-                    nome.split(" — ")[1] if " — " in nome else ""
+                    nome.split(" - ")[1] if " - " in nome else ""
                 )
 
                 tabela_assin.setItem(row, 0, QTableWidgetItem(nome_base))
@@ -8473,7 +8473,7 @@ def gerar_pdfs_por_transportadora(
                 y = altura - margem_sup
 
             c.setFont("Helvetica-Bold", 10)
-            c.drawString(15 * mm, y, f"NF {nNF} — Destinatário: {dados['xNome']}")
+            c.drawString(15 * mm, y, f"NF {nNF} - Destinatário: {dados['xNome']}")
             y -= 5 * mm
 
             c.setFont("Helvetica", 9)
@@ -8507,7 +8507,7 @@ def gerar_pdf_resumo_nf(dados_agrupados, caminho_pdf="/tmp/resumo_nfes.pdf"):
             y = altura - margem_sup
 
         c.setFont("Helvetica-Bold", 10)
-        c.drawString(15 * mm, y, f"NF {nNF} — Destinatário: {dados['xNome']}")
+        c.drawString(15 * mm, y, f"NF {nNF} - Destinatário: {dados['xNome']}")
         y -= 5 * mm
 
         c.setFont("Helvetica", 9)
@@ -8842,7 +8842,7 @@ def criar_grupo_exportacao(estado):
     layout = QVBoxLayout(inner_widget)
     layout.setContentsMargins(0, 0, 0, 0)
 
-    # — Visualização —
+    # - Visualização -
     linha_visualizacao = QHBoxLayout()
 
     btn_ver_planilha = QPushButton("✏️ Editar Planilha Parcial")
@@ -8855,7 +8855,7 @@ def criar_grupo_exportacao(estado):
 
     layout.addLayout(linha_visualizacao)
 
-    # — Registro e complementos —
+    # - Registro e complementos -
     linha_registros = QHBoxLayout()
 
     btn_registrar = QPushButton("📝 Registrar Envios")
@@ -8886,7 +8886,7 @@ def criar_grupo_exportacao(estado):
 
     layout.addLayout(linha_registros)
 
-    # — Exportação e limpeza —
+    # - Exportação e limpeza -
     linha_export = QHBoxLayout()
 
     btn_obter_planilha = QPushButton("💾 Exportar Planilha")
