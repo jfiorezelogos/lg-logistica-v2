@@ -911,7 +911,7 @@ class RuleManagerDialog(QDialog):
 
         # Botões
         linha_btns = QHBoxLayout()
-        self.btn_add = QPushButton("➕ Adicionar")
+        self.btn_add = QPushButton("+ Adicionar")
         self.btn_edit = QPushButton("✏️ Editar")
         self.btn_dup = QPushButton("📄 Duplicar")
         self.btn_del = QPushButton("🗑️ Remover")
@@ -1004,9 +1004,9 @@ class RuleManagerDialog(QDialog):
             t = str(s).strip()
             # remove parênteses e conteúdos
             t = re.sub(r"\s*\(.*?\)\s*", "", t, flags=re.I)
-            # remove prefixo "Assinatura" e corta por traços (—, –, -)
+            # remove prefixo "Assinatura" e corta por tracos (-)
             t = re.sub(r"^\s*assinatura\s+", "", t, flags=re.I)
-            t = re.split(r"\s*[–—-]\s*", t)[0].strip()
+            t = re.split(r"\s*[\u2013\u2014-]\s*", t)[0].strip()
 
             # "2 anos", "3 anos", etc.
             m = re.search(r"(\d+)\s*anos?", t, flags=re.I)
@@ -1081,7 +1081,7 @@ class RuleManagerDialog(QDialog):
 
         brindes = coletar_brindes(a)
         if brindes:
-            partes.append("🎁 " + " | ".join(f"{b['qtd']}× {b['nome']}" for b in brindes))
+            partes.append("🎁 " + " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes))
 
         # 📦 Box
         def pegar_box(action):
@@ -1709,7 +1709,7 @@ def requisicao_com_retry(
                 return resposta
 
             elif resposta.status_code == 422 and tratar_422_como_vazio:
-                print(f"[ℹ️] Nenhum resultado para os parâmetros: {params}")
+                print(f"[INFO] Nenhum resultado para os parâmetros: {params}")
                 return None
 
             elif resposta.status_code == 429:
@@ -2449,7 +2449,7 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
     print(f"[🧵] Disparando {total_tarefas} tarefas no executor único...")
 
     if total_tarefas == 0:
-        print("[ℹ️] Nenhuma tarefa gerada para o período/periodicidade selecionados.")
+        print("[INFO] Nenhuma tarefa gerada para o período/periodicidade selecionados.")
         print(f"[✅ buscar_transacoes_assinaturas] Finalizado - {len(transacoes)} transações")
         return transacoes, {}, dados
 
@@ -5459,9 +5459,9 @@ class BuscarPedidosPagosRunnable(QRunnable):
             "query": (extra_ctx or {}).get("query"),
         }
         try:
-            print(f"[ℹ️] Contexto: {json.dumps(ctx, ensure_ascii=False)}")
+            print(f"[INFO] Contexto: {json.dumps(ctx, ensure_ascii=False)}")
         except Exception:
-            print(f"[ℹ️] Contexto: {ctx}")
+            print(f"[INFO] Contexto: {ctx}")
 
         if resp is not None:
             print(f"[🌐] HTTP {resp.status_code}")
@@ -7217,7 +7217,7 @@ def aplicar_lotes(
     mask_validos = ~df_resultado["indisponivel"].astype(str).str.upper().eq("S")
     excluidos = int((~mask_validos).sum())
     if excluidos:
-        print(f"[ℹ️] Removendo {excluidos} item(ns) marcados como indisponíveis.")
+        print(f"[INFO] Removendo {excluidos} item(ns) marcados como indisponíveis.")
     df_resultado = df_resultado[mask_validos].copy()
 
     print("\n[🚧] Atribuindo ID Lote por email + cpf + cep...")
@@ -8161,7 +8161,7 @@ def abrir_editor_skus(box_nome_input=None):
 
     # 📦 Botões Produtos
     layout_botoes_prod = QHBoxLayout()
-    btn_novo_prod = QPushButton("➕ Novo Produto")
+    btn_novo_prod = QPushButton("+ Novo Produto")
     btn_novo_prod.clicked.connect(adicionar_produto)
     btn_remover_prod = QPushButton("🗑️ Remover Selecionado")
     btn_remover_prod.clicked.connect(remover_produto)
@@ -8171,7 +8171,7 @@ def abrir_editor_skus(box_nome_input=None):
 
     # 📬 Botões Assinaturas
     layout_botoes_assin = QHBoxLayout()
-    btn_nova_assin = QPushButton("➕ Nova Assinatura")
+    btn_nova_assin = QPushButton("+ Nova Assinatura")
     btn_nova_assin.clicked.connect(adicionar_assinatura)
     btn_remover_assin = QPushButton("🗑️ Remover Selecionado")
     btn_remover_assin.clicked.connect(remover_assinatura)
@@ -8181,7 +8181,7 @@ def abrir_editor_skus(box_nome_input=None):
 
     # 📚 Botões Combos
     layout_botoes_combo = QHBoxLayout()
-    btn_novo_combo = QPushButton("➕ Novo Combo")
+    btn_novo_combo = QPushButton("+ Novo Combo")
     btn_novo_combo.clicked.connect(adicionar_combo)
     btn_remover_combo = QPushButton("🗑️ Remover Selecionado")
     btn_remover_combo.clicked.connect(remover_combo)
@@ -8623,7 +8623,7 @@ def criar_grupo_guru(estado, skus_info, transportadoras_var):
     linha_filtros.addWidget(combo_filtro)
     layout.addLayout(linha_filtros)
 
-    # 📦 Box – apenas produtos simples (não-assinatura e não-composto)
+    # 📦 Box - apenas produtos simples (nao-assinatura e nao-composto)
     produtos_simples = [
         nome
         for nome, info in skus_info.items()
