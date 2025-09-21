@@ -8272,11 +8272,11 @@ def abrir_editor_skus(box_nome_input=None):
                 continue
             try:
                 peso = float(peso)
-            except:
+            except (ValueError, TypeError):
                 peso = 0.0
             try:
                 preco = float(preco) if preco else None
-            except:
+            except (ValueError, TypeError):
                 preco = None
             skus[nome] = {
                 "sku": sku,
@@ -8302,7 +8302,7 @@ def abrir_editor_skus(box_nome_input=None):
 
             try:
                 preco = float(preco) if preco else None
-            except:
+            except (ValueError, TypeError):
                 preco = None
 
             guru_ids = [x.strip() for x in guru.split(",") if x.strip()]
@@ -8330,7 +8330,7 @@ def abrir_editor_skus(box_nome_input=None):
                 continue
             try:
                 preco = float(preco) if preco else None
-            except:
+            except (ValueError, TypeError):
                 preco = None
             skus[nome] = {
                 "sku": "",
