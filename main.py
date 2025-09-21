@@ -7166,9 +7166,9 @@ def marcar_itens_como_fulfilled_na_shopify(df):
 
     for order_id, grupo in df.groupby("transaction_id"):
         planilha_line_ids = {
-            f"gid://shopify/LineItem/{int(l.get('id_line_item'))}"
-            for l in grupo.to_dict("records")
-            if l.get("id_line_item")
+            f"gid://shopify/LineItem/{int(rec.get('id_line_item'))}"
+            for rec in grupo.to_dict("records")
+            if rec.get("id_line_item")
         }
 
         runnable = FulfillPedidoRunnable(order_id, planilha_line_ids)
@@ -7399,7 +7399,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             return None
 
         # 1) garantir que há exatamente um ID Lote válido nas linhas
-        lotes_presentes = {(str(l.get("ID Lote") or "").strip()) for l in linhas}
+        lotes_presentes = {(str(row.get("ID Lote") or "").strip()) for row in linhas}
         lotes_presentes.discard("")  # remove vazios
         if len(lotes_presentes) != 1:
             vistos = sorted(lotes_presentes) or ["nenhum"]
@@ -7414,7 +7414,9 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             return None
 
         # filtra só as linhas do lote selecionado
-        linhas_validas = [l for l in linhas if (str(l.get("ID Lote") or "").strip()) == lote_id]
+        linhas_validas = [
+            row for row in linhas if (str(row.get("ID Lote") or "").strip()) == lote_id
+        ]
         if not linhas_validas:
             print(f"[⚠️] Lote {lote_id} ignorado: nenhuma linha válida.")
             return None
@@ -7432,24 +7434,24 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
 
         # 3) total do lote (somando itens com valor > 0; fallback por preco_fallback do SKU)
         total = 0.0
-        for l in linhas_validas:
+        for row in linhas_validas:
             try:
-                valor = float(str(l.get("Valor Total", "0")).replace(",", "."))
+                valor = float(str(row.get("Valor Total", "0")).replace(",", "."))
                 if valor > 0:
                     total += valor
                 else:
-                    sku = str(l.get("SKU", "")).strip()
+                    sku = str(row.get("SKU", "")).strip()
                     for info in skus_info.values():  # usa skus_info global
                         if str(info.get("sku", "")).strip().upper() == sku.upper():
                             total += float(info.get("preco_fallback", 0) or 0)
                             break
             except Exception as e:
-                print(f"[⚠️] Erro ao calcular valor de {l.get('Produto')}: {e}")
+                print(f"[⚠️] Erro ao calcular valor de {row.get('Produto')}: {e}")
 
         # 4) peso total (somando pesos por SKU)
         peso = 0.0
-        for l in linhas_validas:
-            sku = str(l.get("SKU", "")).strip()
+        for row in linhas_validas:
+            sku = str(row.get("SKU", "")).strip()
             achou = False
             for info in skus_info.values():
                 if str(info.get("sku", "")).strip().upper() == sku.upper():
@@ -8264,10 +8266,13 @@ def abrir_editor_skus(box_nome_input=None):
         skus = {}
 
         for row in range(tabela_prod.rowCount()):
-            get = lambda col: (
-                tabela_prod.item(row, col).text().strip() if tabela_prod.item(row, col) else ""
-            )
+
+            def get(col, _row=row):
+                item = tabela_prod.item(_row, col)
+                return item.text().strip() if item else ""
+
             nome, sku, peso, guru, shopify, preco = map(get, range(6))
+
             if not nome:
                 continue
             try:
@@ -8291,10 +8296,13 @@ def abrir_editor_skus(box_nome_input=None):
                 skus[nome]["preco_fallback"] = preco
 
         for row in range(tabela_assin.rowCount()):
-            get = lambda col: (
-                tabela_assin.item(row, col).text().strip() if tabela_assin.item(row, col) else ""
-            )
+
+            def get(col, _row=row):
+                item = tabela_assin.item(_row, col)
+                return item.text().strip() if item else ""
+
             nome_base, recorrencia, periodicidade, guru, preco = map(get, range(5))
+
             if not nome_base:
                 continue
 
@@ -8322,9 +8330,11 @@ def abrir_editor_skus(box_nome_input=None):
                 skus[key]["preco_fallback"] = preco
 
         for row in range(tabela_combo.rowCount()):
-            get = lambda col: (
-                tabela_combo.item(row, col).text().strip() if tabela_combo.item(row, col) else ""
-            )
+
+            def get(col, _row=row):
+                item = tabela_combo.item(_row, col)
+                return item.text().strip() if item else ""
+
             nome, composto, guru, shopify, preco = map(get, range(5))
             if not nome:
                 continue
