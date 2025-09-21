@@ -93,7 +93,7 @@ from unidecode import unidecode
 from common.cli_safe import safe_cli
 from common.errors import ExternalError, UserError
 from common.http_client import http_get, http_post
-from common.logging_setup import correlation_id_ctx, set_correlation_id, setup_logging
+from common.logging_setup import get_correlation_id, set_correlation_id, setup_logging
 from common.settings import settings
 from common.validation import ensure_paths, validate_config
 
@@ -1539,7 +1539,7 @@ class WorkerThread(QThread):
         self.fechar_ui.connect(self.gerenciador.fechar, type=Qt.QueuedConnection)
 
         # 🔗 captura o correlation_id do contexto da thread principal
-        self._parent_correlation_id = correlation_id_ctx.get("-")
+        self._parent_correlation_id = get_correlation_id()
 
     def run(self):
         # 🔗 reata o correlation_id dentro desta thread
@@ -2249,7 +2249,6 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
     )
     if periodicidade_sel not in ("mensal", "bimestral"):
         periodicidade_sel = "bimestral"
-    modo_sel = (dados.get("modo_periodo") or "").strip().upper()  # "PERÍODO" | "TODAS"
 
     # garanta que o mapeamento está no estado
     estado.setdefault("skus_info", estado.get("skus_info", {}))
@@ -4222,7 +4221,6 @@ def importar_planilha_pedidos_guru():
         return
 
     sku = info_produto.get("sku", "")
-    peso = info_produto.get("peso", 0.0)
 
     # ===== Helpers =====
     def parse_money(val):
@@ -4503,7 +4501,6 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
         return
 
     sku_box_original = str(opcao_escolhida).strip()
-    nome_padrao_original = sku_index.get(sku_box_original.upper(), "")
 
     novas_linhas = []
 
@@ -4944,7 +4941,7 @@ class ObterCpfShopifyRunnable(QRunnable):
         self.estado = estado
         self.signals = SinaisObterCpf()
         self.sinal_finalizacao = sinal_finalizacao
-        self._parent_correlation_id = correlation_id_ctx.get("-")
+        self._parent_correlation_id = get_correlation_id()
 
     @pyqtSlot()
     def run(self):
@@ -5344,7 +5341,7 @@ class BuscarBairroRunnable(QRunnable):
         self.callback = callback
         self.estado = estado
         self.sinal_finalizacao = sinal_finalizacao
-        self._parent_correlation_id = correlation_id_ctx.get("-")
+        self._parent_correlation_id = get_correlation_id()
 
     @pyqtSlot()
     def run(self):
@@ -5390,7 +5387,7 @@ class BuscarBairroRunnable(QRunnable):
 
             self.callback(self.order_id, bairro or "")
 
-        except Exception as e:
+        except Exception:
             if self.estado["cancelador_global"].is_set():
                 logger.warning(
                     "bairro_lookup_cancelled_during_exception", extra={"order_id": self.order_id}
@@ -5428,7 +5425,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
         self.fulfillment_status = fulfillment_status
         self.sinais = SinaisBuscarPedidos()
         self.estado = estado
-        self._parent_correlation_id = correlation_id_ctx.get("-")
+        self._parent_correlation_id = get_correlation_id()
 
         # ✅ salva o modo selecionado para uso no tratar_resultado
         self.estado["fulfillment_status_selecionado"] = (
@@ -5874,7 +5871,7 @@ class VerificadorDeEtapa(QObject):
 
         # logging
         self._log_cada_n = max(1, int(log_cada_n_checks))
-        self._parent_correlation_id = correlation_id_ctx.get("-")
+        self._parent_correlation_id = get_correlation_id()
 
     def iniciar(self):
         set_correlation_id(self._parent_correlation_id)
@@ -8459,7 +8456,7 @@ def gerar_pdfs_por_transportadora(
         caminho_pdf = os.path.join(pasta_destino, nome_arquivo)
 
         c = canvas.Canvas(caminho_pdf, pagesize=A4)
-        largura, altura = A4
+        altura = A4
         margem_sup = 10 * mm
         margem_inf = 10 * mm
         y = altura - margem_sup
@@ -8492,7 +8489,7 @@ def gerar_pdfs_por_transportadora(
 def gerar_pdf_resumo_nf(dados_agrupados, caminho_pdf="/tmp/resumo_nfes.pdf"):
 
     c = canvas.Canvas(caminho_pdf, pagesize=A4)
-    largura, altura = A4
+    altura = A4
 
     margem_sup = 10 * mm
     margem_inf = 10 * mm
