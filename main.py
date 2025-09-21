@@ -536,7 +536,7 @@ def obter_ids_assinaturas_por_duracao(skus_info):
     # mapa auxiliar: guru_id -> {"recorrencia":..., "periodicidade":...}
     guru_meta = {}
 
-    for nome, info in skus_info.items():
+    for info in skus_info.items():
         if info.get("tipo") == "assinatura":
             ids = info.get("guru_ids", [])
             dur = (info.get("recorrencia") or "").lower()
@@ -2121,7 +2121,6 @@ def iniciar_busca_assinaturas(
     mes,
     modo_periodo,
     box_nome_input,
-    transportadoras_var,
     estado,
     skus_info,
     *,
@@ -2208,7 +2207,7 @@ def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel
     ids_por_tipo = {k: [] for k in ["anuais", "bianuais", "trianuais", "bimestrais", "mensais"]}
     todos = set()
 
-    for nome, info in (skus_info or {}).items():
+    for info in (skus_info or {}).items():
         if (info.get("tipo") or "").lower() != "assinatura":
             continue
         if (info.get("periodicidade") or "").lower() != periodicidade_sel:
@@ -3374,9 +3373,7 @@ def _norm(s: str) -> str:
     return unidecode((s or "").strip().lower())
 
 
-def aplicar_regras_transaction(
-    transacao: dict, dados: dict, skus_info: dict, base_produto_principal: str
-):
+def aplicar_regras_transaction(transacao: dict, dados: dict, base_produto_principal: str):
     """
     Lê config_ofertas.json e aplica:
       - override da box (action.type == 'alterar_box')
@@ -6884,7 +6881,7 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
     iniciar_busca_cpfs(estado, estado.get("gerenciador_progresso"), depois)
 
 
-def slot_cpf_ok(pedido_id, cpf, estado, gerenciador=None, depois=None):
+def slot_cpf_ok(pedido_id, cpf, estado, gerenciador=None):
     pedido_id = normalizar_transaction_id(pedido_id)
     estado.setdefault("cpf_pendentes", set())
     estado.setdefault("dados_temp", {}).setdefault("cpfs", {})
@@ -6947,7 +6944,7 @@ def slot_bairro_ok(pedido_id, bairro, estado, gerenciador=None, depois=None):
                     logger.exception(f"[❌] Erro no callback `depois()` de bairro: {e}")
 
 
-def tratar_erro(msg, estado, gerenciador):
+def tratar_erro(gerenciador):
     thread_ui = QCoreApplication.instance().thread()
     if QThread.currentThread() == thread_ui:
         gerenciador.fechar()
@@ -7270,7 +7267,7 @@ def aplicar_lotes(df: pd.DataFrame, estado: dict = None, lote_inicial: int = 1) 
         df_resultado["Valor Desconto Lote"] = ""
 
     lote_atual = lote_inicial
-    for chave, grupo in agrupado:
+    for grupo in agrupado:
         indices = grupo.index.tolist()
         id_lote_str = f"L{lote_atual:04d}"
         df_resultado.loc[indices, "ID Lote"] = id_lote_str
@@ -7854,7 +7851,7 @@ def limpar_planilha():
 def gerar_pdf_resumo_logistica(df, data_envio, bimestre, ano, caminho_planilha):
     # 🔁 Agrupa os produtos por Número pedido (pedido final)
     agrupado = {}
-    for numero_pedido, grupo in df.groupby("Número pedido"):
+    for grupo in df.groupby("Número pedido"):
         produtos = grupo["Produto"].dropna().tolist()
         produtos = [p.strip() for p in produtos if p.strip()]
         if not produtos:

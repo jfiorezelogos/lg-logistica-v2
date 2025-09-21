@@ -1,10 +1,10 @@
 [tool.black]
 line-length = 100
-target-version = ["py311"]  # ou ["py313"] se a venv for 3.13
+target-version = ["py313"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"  # ou "py313", se a venv for 3.13
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ARG", "RUF", "C4"]
@@ -16,21 +16,21 @@ ignore = ["E203", "E501"]  # Black manda na quebra de linha
   "DTZ",                 # datetime naive
   "RUF001", "RUF003",    # unicode ambíguo
   "RUF013",              # Optional implícito
-  "E741", "B023",        # nomes ruins
-  "ARG001", "B007",      # args/loop-var não usados
-  "UP038"              # isinstance tuple -> X | Y
+  "UP038"                # isinstance tuple -> X | Y
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["app", "src"]
+known-first-party = ["app", "src", "common"]
 combine-as-imports = true
 
 [tool.mypy]
-python_version = "3.11"     # ou 3.13
+python_version = "3.13"
 strict = false
 ignore_missing_imports = true
 disallow_untyped_defs = false
 follow_imports = "silent"
+namespace_packages = true
+explicit_package_bases = true
 
 # Exclui o main.py por enquanto (voltamos nele com metas graduais)
 exclude = "main\\.py"
