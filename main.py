@@ -345,6 +345,63 @@ def to_br_date(ddmmyyyy_dt: datetime) -> str:
     return ensure_aware_local(ddmmyyyy_dt).strftime("%d/%m/%Y")
 
 
+# ================= Helpers de data (UTC aware) =================
+
+
+def _aware_utc(dt: datetime) -> datetime:
+    """Garante datetime UTC-aware (nunca retorna None)."""
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+
+def _as_dt(x):
+    """Aceita datetime/str ISO e devolve datetime UTC aware."""
+    if isinstance(x, datetime):
+        return _aware_utc(x)
+    try:
+        # tenta ISO; se vier naive, marca UTC
+        d = datetime.fromisoformat(str(x))
+        return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
+    except Exception:
+        # fallback conservador: recusa em vez de criar naive
+        raise
+
+
+def _first_day_next_month(dt: datetime) -> datetime:
+    dt = _aware_utc(dt)
+    y, m = dt.year, dt.month
+    return datetime(y + (m // 12), 1 if m == 12 else m + 1, 1, tzinfo=UTC)
+
+
+def _last_moment_of_month(y: int, m: int) -> datetime:
+    if m == 12:
+        return datetime(y, 12, 31, 23, 59, 59, 999_999, tzinfo=UTC)
+    nxt = datetime(y, m + 1, 1, tzinfo=UTC)
+    return nxt - timedelta(microseconds=1)
+
+
+def _inicio_mes_por_data(dt: datetime) -> datetime:
+    dt = _aware_utc(dt)
+    return datetime(dt.year, dt.month, 1, tzinfo=UTC)
+
+
+def _inicio_bimestre_por_data(dt: datetime) -> datetime:
+    dt = _aware_utc(dt)
+    # bimestres: (1-2), (3-4), (5-6), (7-8), (9-10), (11-12)
+    m_ini = dt.month if dt.month % 2 == 1 else dt.month - 1
+    return datetime(dt.year, m_ini, 1, tzinfo=UTC)
+
+
+def _fim_bimestre_por_data(dt: datetime) -> datetime:
+    dt = _aware_utc(dt)
+    m_end = dt.month if dt.month % 2 == 0 else dt.month + 1
+    y = dt.year
+    if m_end == 13:
+        y, m_end = y + 1, 1
+    return _last_moment_of_month(y, m_end)
+
+
+LIMITE_INFERIOR = datetime(2024, 10, 1, tzinfo=UTC)
+
 # Mapear produtos do Guru
 
 
@@ -2301,10 +2358,10 @@ def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel
             continue
 
         for gid in info.get("guru_ids", []):
-            gid = str(gid).strip()
-            if gid:
-                ids_por_tipo[chave_tipo].append(gid)
-                todos.add(gid)
+            gid_str = str(gid).strip()
+            if gid_str:
+                ids_por_tipo[chave_tipo].append(gid_str)
+                todos.add(gid_str)
 
     # dedup
     for k in ids_por_tipo:
@@ -2316,7 +2373,7 @@ def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel
 def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, estado=None):
     print("[🔍 buscar_transacoes_assinaturas] Início da função")
 
-    from datetime import datetime, timedelta  # imports locais p/ não depender do topo
+    from datetime import datetime  # imports locais p/ não depender do topo
 
     transacoes = []
     if estado is None:
@@ -2339,12 +2396,12 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
     dados["ids_planos_todos"] = ids_map.get("todos", [])
 
     # 🗓 período indicado na UI
-    dt_ini_sel = (
+    dt_ini_sel: datetime | None = (
         dados.get("ordered_at_ini_periodo")
         or dados.get("ordered_at_ini_anual")
         or dados.get("ordered_at_ini_bimestral")
     )
-    dt_end_sel = (
+    dt_end_sel: datetime | None = (
         dados.get("ordered_at_end_periodo")
         or dados.get("ordered_at_end_anual")
         or dados.get("ordered_at_end_bimestral")
@@ -2355,55 +2412,10 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
             "ordered_at_ini / ordered_at_end não informados para o período selecionado."
         )
 
-    # ================= Helpers de data (UTC aware) =================
-    def _aware_utc(dt: datetime | None) -> datetime | None:
-        if dt is None:
-            return None
-        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
-
-    def _as_dt(x):
-        """Aceita datetime/str ISO e devolve datetime UTC aware."""
-        if isinstance(x, datetime):
-            return _aware_utc(x)
-        try:
-            # tenta ISO; se vier naive, marca UTC
-            d = datetime.fromisoformat(str(x))
-            return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
-        except Exception:
-            # fallback conservador: recusa em vez de criar naive
-            raise
-
-    def _first_day_next_month(dt: datetime) -> datetime:
-        dt = _aware_utc(dt)
-        y, m = dt.year, dt.month
-        return datetime(y + (m // 12), 1 if m == 12 else m + 1, 1, tzinfo=UTC)
-
-    def _last_moment_of_month(y: int, m: int) -> datetime:
-        if m == 12:
-            return datetime(y, 12, 31, 23, 59, 59, 999_999, tzinfo=UTC)
-        nxt = datetime(y, m + 1, 1, tzinfo=UTC)
-        return nxt - timedelta(microseconds=1)
-
-    def _inicio_mes_por_data(dt: datetime) -> datetime:
-        dt = _aware_utc(dt)
-        return datetime(dt.year, dt.month, 1, tzinfo=UTC)
-
-    def _inicio_bimestre_por_data(dt: datetime) -> datetime:
-        dt = _aware_utc(dt)
-        # bimestres: (1-2), (3-4), (5-6), (7-8), (9-10), (11-12)
-        m_ini = dt.month if dt.month % 2 == 1 else dt.month - 1
-        return datetime(dt.year, m_ini, 1, tzinfo=UTC)
-
-    def _fim_bimestre_por_data(dt: datetime) -> datetime:
-        dt = _aware_utc(dt)
-        m_end = dt.month if dt.month % 2 == 0 else dt.month + 1
-        y = dt.year
-        if m_end == 13:
-            y += 1
-            m_end = 1
-        return _last_moment_of_month(y, m_end)
-
-    LIMITE_INFERIOR = datetime(2024, 10, 1, tzinfo=UTC)
+    if not dt_ini_sel or not dt_end_sel:
+        raise ValueError(
+            "ordered_at_ini / ordered_at_end não informados para o período selecionado."
+        )
 
     # ================= Normaliza período selecionado =================
     end_sel = _as_dt(dt_end_sel)
