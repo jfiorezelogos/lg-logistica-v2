@@ -6,10 +6,9 @@ import os
 import re
 import sys
 import uuid
-from collections.abc import Callable, Iterable  # ✅ agora traz Callable
+from collections.abc import Iterable
 from contextvars import ContextVar
-from time import gmtime, struct_time
-from typing import cast
+from typing import Any
 
 from pythonjsonlogger import jsonlogger
 
@@ -17,7 +16,7 @@ from pythonjsonlogger import jsonlogger
 # Contexto propagado por execução
 # ---------------------------
 correlation_id_ctx: ContextVar[str] = ContextVar("correlation_id", default="-")
-app_env_ctx: ContextVar[str] = ContextVar("app_env")
+app_env_ctx: ContextVar[str] = ContextVar("app_env", default="dev")
 
 
 def get_correlation_id() -> str:
@@ -54,7 +53,7 @@ class ContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         # Campos padronizados
         record.correlation_id = correlation_id_ctx.get("-")
-        record.env = app_env_ctx.get("dev")
+        record.env = app_env_ctx.get()
         record.service = self.service
         record.version = self.version
         record.pid = os.getpid()
@@ -71,20 +70,23 @@ class ContextFilter(logging.Filter):
 # Formatter JSON (UTC, ISO-8601)
 # ---------------------------
 class UtcJsonFormatter(jsonlogger.JsonFormatter):
-    converter: Callable[[float | None], struct_time] = cast(
-        Callable[[float | None], struct_time], gmtime
-    )
-
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         kwargs.setdefault("timestamp", True)
         kwargs.setdefault("json_ensure_ascii", False)
         kwargs.setdefault("json_indent", None)
         kwargs.setdefault(
             "rename_fields", {"asctime": "ts", "levelname": "level", "message": "msg"}
         )
+        # se o stub reclamar dos kwargs, habilite a linha abaixo:
+        # super().__init__(*args, **kwargs)  # type: ignore[call-arg]
         super().__init__(*args, **kwargs)
 
-    def add_fields(self, log_record, record, message_dict):
+    def add_fields(
+        self,
+        log_record: dict[str, Any],
+        record: logging.LogRecord,
+        message_dict: dict[str, Any],
+    ) -> None:
         super().add_fields(log_record, record, message_dict)
         if (
             "ts" in log_record
@@ -172,7 +174,7 @@ def setup_logging(
         root.addHandler(fh)
 
     # Reduz ruído de libs conhecidas (sempre WARNING)
-    for name in quiet_loggers or []:
+    for name in quiet_loggers or ():
         logging.getLogger(name).setLevel(logging.WARNING)
 
 

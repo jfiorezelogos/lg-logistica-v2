@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from pydantic import BaseModel, Field, ValidationError
-from pydantic.functional_validators import field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from .errors import UserError
 
@@ -22,7 +21,7 @@ class JobConfig(BaseModel):
     @field_validator("input_path")
     @classmethod
     def validate_input_ext(cls, v: str) -> str:
-        allowed = (".csv", ".xlsx")
+        allowed: tuple[str, str] = (".csv", ".xlsx")
         if not v.lower().endswith(allowed):
             raise ValueError(f"input_path deve terminar com {allowed}")
         return v
@@ -33,7 +32,8 @@ def validate_config(payload: dict[str, Any]) -> JobConfig:
     Converte o dicionário em JobConfig e converte ValidationError em UserError.
     """
     try:
-        return JobConfig.model_validate(payload)
+        # mypy às vezes não infere corretamente o tipo retornado
+        return cast(JobConfig, JobConfig.model_validate(payload))
     except ValidationError as e:
         # e.errors() traz uma lista estruturada com campo, msg, tipo etc.
         raise UserError(

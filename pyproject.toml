@@ -40,7 +40,7 @@ combine-as-imports = true
 
 [tool.mypy]
 python_version = "3.13"
-ignore_missing_imports = true
+ignore_missing_imports = false
 follow_imports = "silent"
 namespace_packages = true
 explicit_package_bases = true

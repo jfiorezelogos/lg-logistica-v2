@@ -11,15 +11,16 @@ repos:
         args: [--fix]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+    rev: v1.10.0   # pode subir para v1.11.2 se quiser
     hooks:
       - id: mypy
         args: []  # sem --pretty
         additional_dependencies:
+          - pydantic>=2
+          - pydantic-settings>=2
+          - python-json-logger>=2.0.7
           - types-requests
           - types-python-dateutil
           - pandas-stubs
           - types-colorama
-        exclude: ^main\.py$   # <<< pula o main.py no hook
-
-
+        exclude: ^main\.py$   # continua pulando o main.py no hook

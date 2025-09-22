@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from calendar import monthrange
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
@@ -25,7 +25,13 @@ from functools import partial
 from json import JSONDecodeError
 from os import PathLike
 from threading import Event
-from typing import Any, Literal, Protocol, TypedDict, cast
+from typing import (
+    Any,
+    Literal,
+    Protocol,
+    TypedDict,
+    cast,
+)
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -5699,7 +5705,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
     def run(self):
         set_correlation_id(self._parent_correlation_id)
         logger.info(
-            "bairro_lookup_start",
+            "coleta_lookup_start",
             extra={
                 "data_inicio": self.data_inicio_str,
                 "fulfillment_status": (self.fulfillment_status or "").strip().lower(),
@@ -5987,43 +5993,43 @@ class BuscarPedidosPagosRunnable(QRunnable):
 class VerificadorDeEtapa(QObject):
     def __init__(
         self,
-        estado,
-        chave,
-        total_esperado,
-        get_pendentes,
-        callback_final=None,
-        intervalo_ms=300,
-        timeout=60,
-        max_intervalo_ms=5000,
-        log_cada_n_checks=10,
-    ):
+        estado: MutableMapping[str, Any],
+        chave: str,
+        total_esperado: int,
+        get_pendentes: Callable[[], set[Any] | None],
+        callback_final: Callable[[], None] | None = None,
+        intervalo_ms: int = 300,
+        timeout: int = 60,
+        max_intervalo_ms: int = 5000,
+        log_cada_n_checks: int = 10,
+    ) -> None:
         super().__init__()
-        self.estado = estado
-        self.chave = chave
-        self.total_esperado = total_esperado
-        self.get_pendentes = get_pendentes
-        self.callback_final = callback_final
+        self.estado: MutableMapping[str, Any] = estado
+        self.chave: str = chave
+        self.total_esperado: int = int(total_esperado)
+        self.get_pendentes: Callable[[], set[Any] | None] = get_pendentes
+        self.callback_final: Callable[[], None] | None = callback_final
 
         # controle de temporização
-        self.intervalo_inicial_ms = max(50, int(intervalo_ms))
-        self.intervalo_atual_ms = self.intervalo_inicial_ms
-        self.max_intervalo_ms = max_intervalo_ms
-        self.timeout = timeout
+        self.intervalo_inicial_ms: int = max(50, int(intervalo_ms))
+        self.intervalo_atual_ms: int = self.intervalo_inicial_ms
+        self.max_intervalo_ms: int = int(max_intervalo_ms)
+        self.timeout: int = int(timeout)
 
         # book-keeping
-        self.contador = 0
-        self._encerrado = False
-        self._ultimo_len = None
-        self._ultimo_tick_com_progresso = time.monotonic()
-        self._timer = QTimer(self)
+        self.contador: int = 0
+        self._encerrado: bool = False
+        self._ultimo_len: int | None = None
+        self._ultimo_tick_com_progresso: float = time.monotonic()
+        self._timer: QTimer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._verificar)
 
         # logging
-        self._log_cada_n = max(1, int(log_cada_n_checks))
-        self._parent_correlation_id = get_correlation_id()
+        self._log_cada_n: int = max(1, int(log_cada_n_checks))
+        self._parent_correlation_id: str = get_correlation_id()
 
-    def iniciar(self):
+    def iniciar(self) -> None:
         set_correlation_id(self._parent_correlation_id)
         logger.info(
             "monitor_start",
@@ -6039,19 +6045,23 @@ class VerificadorDeEtapa(QObject):
         self.estado["etapas_finalizadas"][self.chave] = False
         QTimer.singleShot(0, self._verificar)
 
-    def _reagendar(self):
+    def _reagendar(self) -> None:
         if self._encerrado:
             return
         self._timer.start(self.intervalo_atual_ms)
 
-    def _verificar(self):
+    def _verificar(self) -> None:
         if self._encerrado:
             return
 
         self.contador += 1
-        pendentes = self.get_pendentes() or set()
-        lp = len(pendentes)
-        cancelado = self.estado["cancelador_global"].is_set()
+        pendentes_raw = self.get_pendentes() or set()
+        pendentes: set[Any] = cast(set[Any], pendentes_raw)
+        lp: int = len(pendentes)
+
+        # pode não existir em testes ou cenários específicos; mantém default compatível
+        cancel_event = self.estado.get("cancelador_global", threading.Event())
+        cancelado: bool = bool(cancel_event.is_set())
 
         # timeout real em segundos (não em número de checks)
         if (time.monotonic() - self._ultimo_tick_com_progresso) > self.timeout and cancelado:
@@ -6093,7 +6103,7 @@ class VerificadorDeEtapa(QObject):
             return
 
         # se já foi marcada como finalizada por outro caminho, encerra
-        if self.estado.get(f"finalizou_{self.chave}", False):
+        if bool(self.estado.get(f"finalizou_{self.chave}", False)):
             self._encerrar()
             return
 
@@ -6109,7 +6119,7 @@ class VerificadorDeEtapa(QObject):
         self._ultimo_len = lp
         self._reagendar()
 
-    def _encerrar(self):
+    def _encerrar(self) -> None:
         if self._encerrado:
             return
         self._encerrado = True
@@ -6275,7 +6285,7 @@ def iniciar_busca_bairros(estado, gerenciador, depois=None):
             df,
             # callback de cada item
             lambda pid, bairro: slot_bairro_ok(
-                pedido_id=pid, bairro=bairro, estado=estado, gerenciador=gerenciador, depois=depois
+                pedido_id=pid, bairro=bairro, estado=estado, gerenciador=gerenciador
             ),
             estado,
         )
@@ -7065,10 +7075,22 @@ def slot_cpf_ok(
     logger.info(f"[OK] CPF {atual}/{total} coletado para pedido {pedido_id}")
 
 
-def slot_bairro_ok(pedido_id, bairro, estado, gerenciador=None, depois=None):
+def slot_bairro_ok(
+    pedido_id: str,
+    bairro: str,
+    estado: dict,
+    gerenciador: Any | None = None,
+) -> None:
     pedido_id = normalizar_transaction_id(pedido_id)
     estado.setdefault("bairro_pendentes", set())
     estado.setdefault("dados_temp", {}).setdefault("bairros", {})
+
+    # Cancela cedo se necessário (coerente com slot_cpf_ok)
+    if estado.get("cancelador_global", threading.Event()).is_set():
+        logger.warning(f"[🛑] Cancelamento detectado durante slot_bairro_ok → pedido {pedido_id}")
+        if gerenciador:
+            gerenciador.fechar()
+        return
 
     if pedido_id in estado["bairro_pendentes"]:
         estado["bairro_pendentes"].discard(pedido_id)
@@ -7077,30 +7099,8 @@ def slot_bairro_ok(pedido_id, bairro, estado, gerenciador=None, depois=None):
         total = estado.get("bairro_total_esperado", 0)
         atual = total - len(estado["bairro_pendentes"])
         logger.info(f"[📍] Bairros: {atual}/{total}")
-
     else:
         logger.debug(f"[🟡] Pedido {pedido_id} já processado ou inexistente em pendentes.")
-
-    if not estado["bairro_pendentes"]:
-        if not estado["etapas_finalizadas"].get("bairro") and not estado.get(
-            "finalizou_bairro", False
-        ):
-            estado["etapas_finalizadas"]["bairro"] = True
-            estado["finalizou_bairro"] = True
-            logger.info("[✅] Todos os bairros coletados.")
-
-            if estado.get("cancelador_global", threading.Event()).is_set():
-                logger.warning("[🛑] Cancelamento detectado após bairros.")
-                if gerenciador:
-                    gerenciador.fechar()
-                return
-
-            if callable(depois):
-                logger.info("[📞] Chamando função `depois()` após bairros.")
-                try:
-                    depois()
-                except Exception as e:
-                    logger.exception(f"[❌] Erro no callback `depois()` de bairro: {e}")
 
 
 def tratar_erro(gerenciador):
@@ -7481,10 +7481,12 @@ def aplicar_lotes(
     return df_resultado
 
 
-def padronizar_transportadora_servico(row):
+def padronizar_transportadora_servico(
+    row: Mapping[str, Any],
+) -> tuple[str, str]:
     nome_original = str(row.get("Transportadora", "")).strip().upper()
 
-    mapeamento = {
+    mapeamento: dict[str, tuple[str, str]] = {
         "JET": ("JET EXPRESS BRAZIL LTDA", "jet"),
         "GOL": ("GOL LINHAS AEREAS SA", "E-GOLLOG"),
         "LOG": ("LOGGI", "loggi"),
@@ -7498,10 +7500,14 @@ def padronizar_transportadora_servico(row):
         if chave in nome_original:
             return nome_bling, servico_bling
 
-    return row.get("Transportadora", ""), row.get("Serviço", "")
+    return str(row.get("Transportadora", "")), str(row.get("Serviço", ""))
 
 
-def gerar_payload_fretebarato(cep, total_pedido, peso_total):
+def gerar_payload_fretebarato(
+    cep: str | int,
+    total_pedido: float | str,
+    peso_total: float | str,
+) -> dict[str, Any]:
     cep_limpo = re.sub(r"\D", "", str(cep)).zfill(8)
 
     return {
@@ -7521,7 +7527,11 @@ def gerar_payload_fretebarato(cep, total_pedido, peso_total):
     }
 
 
-def adicionar_checkboxes_transportadoras(layout, transportadoras_lista, transportadoras_var):
+def adicionar_checkboxes_transportadoras(
+    layout: QVBoxLayout,
+    transportadoras_lista: Sequence[str],
+    transportadoras_var: MutableMapping[str, QCheckBox],
+) -> None:
     for nome in transportadoras_lista:
         if nome not in transportadoras_var:
             checkbox = QCheckBox(nome)
@@ -7530,7 +7540,11 @@ def adicionar_checkboxes_transportadoras(layout, transportadoras_lista, transpor
             layout.addWidget(checkbox)
 
 
-def cotar_para_lote(trans_id, linhas, selecionadas):
+def cotar_para_lote(
+    trans_id: str | int,
+    linhas: Sequence[Mapping[str, Any]],
+    selecionadas: Sequence[str] | None,
+) -> tuple[str, str, str, float] | None:
     """
     Faz a cotação de frete para um LOTE (agrupado por e-mail + CPF + CEP).
     'trans_id' aqui é o identificador do LOTE (ex.: 'L0001'), não de transação.
@@ -7538,10 +7552,12 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
     Retorna: (lote_id, nome_transportadora, servico, valor) ou None.
     """
     try:
-        lote_id = str(trans_id).strip()
+        lote_id: str = str(trans_id).strip()
 
         # 0) normaliza transportadoras selecionadas
-        nomes_aceitos = {str(s).strip().upper() for s in (selecionadas or []) if str(s).strip()}
+        nomes_aceitos: set[str] = {
+            str(s).strip().upper() for s in (selecionadas or []) if str(s).strip()
+        }
         if not nomes_aceitos:
             msg = f"Nenhuma transportadora selecionada para o lote {lote_id}."
             print(f"[⚠️] {msg}")
@@ -7552,7 +7568,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             return None
 
         # 1) garantir que há exatamente um ID Lote válido nas linhas
-        lotes_presentes = {(str(row.get("ID Lote") or "").strip()) for row in linhas}
+        lotes_presentes: set[str] = {str(row.get("ID Lote") or "").strip() for row in linhas}
         lotes_presentes.discard("")  # remove vazios
         if len(lotes_presentes) != 1:
             vistos = sorted(lotes_presentes) or ["nenhum"]
@@ -7567,15 +7583,15 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             return None
 
         # filtra só as linhas do lote selecionado
-        linhas_validas = [
-            row for row in linhas if (str(row.get("ID Lote") or "").strip()) == lote_id
+        linhas_validas: list[Mapping[str, Any]] = [
+            row for row in linhas if str(row.get("ID Lote") or "").strip() == lote_id
         ]
         if not linhas_validas:
             print(f"[⚠️] Lote {lote_id} ignorado: nenhuma linha válida.")
             return None
 
         # 2) CEP (usa a primeira linha do lote)
-        cep = (linhas_validas[0].get("CEP Entrega") or "").strip()
+        cep: str = str(linhas_validas[0].get("CEP Entrega") or "").strip()
         if not cep:
             msg = f"Lote {lote_id} ignorado: CEP não encontrado."
             print(f"[⚠️] {msg}")
@@ -7586,7 +7602,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             return None
 
         # 3) total do lote (somando itens com valor > 0; fallback por preco_fallback do SKU)
-        total = 0.0
+        total: float = 0.0
         for row in linhas_validas:
             try:
                 valor = float(str(row.get("Valor Total", "0")).replace(",", "."))
@@ -7602,7 +7618,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
                 print(f"[⚠️] Erro ao calcular valor de {row.get('Produto')}: {e}")
 
         # 4) peso total (somando pesos por SKU)
-        peso = 0.0
+        peso: float = 0.0
         for row in linhas_validas:
             sku = str(row.get("SKU", "")).strip()
             achou = False
@@ -7614,7 +7630,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             if not achou and sku:
                 print(f"[⚠️] SKU '{sku}' não encontrado no skus_info para o lote {lote_id}")
 
-        itens = len(linhas_validas)
+        itens: int = len(linhas_validas)
         print(
             f"[🔎] Lote {lote_id} - CEP: {cep} | Itens: {itens} | Peso: {peso:.3f} kg | Total: R$ {total:.2f}"
         )
@@ -7629,7 +7645,7 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             return None
 
         # 5) cotação (API/formatos já corretos segundo seu ambiente)
-        payload = gerar_payload_fretebarato(cep, total, peso)
+        payload: dict[str, Any] = gerar_payload_fretebarato(cep, total, peso)
 
         # 💡 Substituição: http_post com retries/backoff e respeito a 429/5xx
         try:
@@ -7645,12 +7661,17 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
             )
             return None
 
-        data = r.json()
-        quotes = data.get("quotes", []) or []
+        data: dict[str, Any] = r.json()
+        quotes_raw = data.get("quotes", []) or []
+        quotes: list[Mapping[str, Any]] = (
+            quotes_raw if isinstance(quotes_raw, list) else []
+        )  # robustez de tipo
         print(f"[📦] Lote {lote_id} - {len(quotes)} cotações recebidas")
 
         # filtra por transportadoras selecionadas
-        opcoes = [q for q in quotes if str(q.get("name", "")).strip().upper() in nomes_aceitos]
+        opcoes: list[Mapping[str, Any]] = [
+            q for q in quotes if str(q.get("name", "")).strip().upper() in nomes_aceitos
+        ]
         print(
             f"[🔎] Lote {lote_id} - {len(opcoes)} compatíveis com selecionadas: {sorted(nomes_aceitos)}"
         )
@@ -7663,14 +7684,27 @@ def cotar_para_lote(trans_id, linhas, selecionadas):
         print(
             f"[✅] Lote {lote_id} - Frete: {melhor['name']} ({melhor.get('service','')}) - R$ {float(melhor['price']):.2f}"
         )
-        return lote_id, melhor["name"], melhor.get("service", ""), float(melhor["price"])
+        return (
+            lote_id,
+            str(melhor["name"]),
+            str(melhor.get("service", "")),
+            float(melhor["price"]),
+        )
 
     except Exception as e:
         print(f"[❌] Erro ao cotar frete para lote {trans_id}: {e}")
         return None
 
 
-def cotar_fretes_planilha(estado, transportadoras_var, barra_progresso_frete):
+class SupportsIsChecked(Protocol):
+    def isChecked(self) -> bool: ...
+
+
+def cotar_fretes_planilha(
+    estado: MutableMapping[str, Any],
+    transportadoras_var: Mapping[str, SupportsIsChecked],
+    barra_progresso_frete: QProgressBar,
+) -> None:
     print("[🧪 estado id dentro da cotação]:", id(estado))
 
     df = estado.get("df_planilha_parcial")
@@ -7681,7 +7715,7 @@ def cotar_fretes_planilha(estado, transportadoras_var, barra_progresso_frete):
         return
 
     # 🔎 Transportadoras selecionadas
-    selecionadas = [k for k, var in transportadoras_var.items() if var.isChecked()]
+    selecionadas: list[str] = [k for k, var in transportadoras_var.items() if var.isChecked()]
     if not selecionadas:
         comunicador_global.mostrar_mensagem.emit(
             "aviso", "Aviso", "Nenhuma transportadora selecionada."
@@ -7694,35 +7728,35 @@ def cotar_fretes_planilha(estado, transportadoras_var, barra_progresso_frete):
         print("[🧪 ID transações planilha]", df["transaction_id"].unique())
 
     # 🔁 (Re)atribui ID Lote antes de cotar
-    df = aplicar_lotes(df, estado)
+    df = aplicar_lotes(df, cast(dict[Any, Any], estado))
     estado["df_planilha_parcial"] = df
     print("[⚙️] ID Lote atribuído antes da cotação.")
 
     # Agrupa por lote (apenas lotes válidos, não vazios)
-    pedidos_por_lote = {}
+    pedidos_por_lote: dict[str, list[dict[str, Any]]] = {}
     for _, linha in df.iterrows():
-        lote = (linha.get("ID Lote") or "").strip()
+        lote = str(linha.get("ID Lote") or "").strip()
         if lote:
             pedidos_por_lote.setdefault(lote, []).append(linha.to_dict())
 
-    ids_lotes = list(pedidos_por_lote.items())
-    total = len(ids_lotes)
-    fretes_aplicados = []
+    ids_lotes: list[tuple[str, list[dict[str, Any]]]] = list(pedidos_por_lote.items())
+    total: int = len(ids_lotes)
+    fretes_aplicados: list[tuple[str, str, float]] = []
 
     print(f"[📦] Iniciando cotação de {total} lotes.")
     barra_progresso_frete.setVisible(True)
     barra_progresso_frete.setMaximum(total)
     barra_progresso_frete.setValue(0)
 
-    def processar_proxima(index=0):
+    def processar_proxima(index: int = 0) -> None:
         if index >= total:
             barra_progresso_frete.setVisible(False)
             estado["df_planilha_parcial"] = df
 
             if fretes_aplicados:
                 resumo = "📦 Médias de frete por transportadora/serviço:\n\n"
-                agrupados = {}
-                total_fretes = 0.0
+                agrupados: dict[str, list[float]] = {}
+                total_fretes: float = 0.0
 
                 for nome, servico, valor in fretes_aplicados:
                     chave = f"{nome} - {servico}"
@@ -7746,8 +7780,9 @@ def cotar_fretes_planilha(estado, transportadoras_var, barra_progresso_frete):
 
         resultado = cotar_para_lote(lote_id, linhas, selecionadas)
         if resultado:
+            # resultado esperado: (lote_id, nome_transportadora, nome_servico, valor_frete, ...)
             nome_transportadora, nome_servico, valor_frete = resultado[1:]
-            fretes_aplicados.append((nome_transportadora, nome_servico, valor_frete))
+            fretes_aplicados.append((nome_transportadora, nome_servico, float(valor_frete)))
 
             # Atualiza diretamente no DataFrame para todo o lote
             df.loc[df["ID Lote"] == lote_id, "Transportadora"] = nome_transportadora
@@ -7814,7 +7849,7 @@ class VisualizadorPlanilhaDialog(QDialog):
                 if col in ["Data", "Data Pedido"]:
                     try:
                         dt = datetime.strptime(valor, "%d/%m/%Y").replace(tzinfo=TZ_APP)
-                        item.setData(Qt.UserRole, dt)  # type: ignore[arg-type]
+                        item.setData(Qt.UserRole, dt)
                     except Exception:
                         pass
                 self.tabela.setItem(i, j, item)
@@ -7903,7 +7938,7 @@ class VisualizadorPlanilhaDialog(QDialog):
         self.accept()
 
 
-def visualizar_planilha_parcial(estado):
+def visualizar_planilha_parcial(estado: MutableMapping[str, Any]) -> None:
     df = estado.get("df_planilha_parcial")
     if df is None or df.empty:
         comunicador_global.mostrar_mensagem.emit("info", "Aviso", "Nenhuma planilha carregada.")
@@ -7914,14 +7949,14 @@ def visualizar_planilha_parcial(estado):
         estado["df_planilha_parcial"] = dialog.df.copy()
 
 
-def exibir_planilha_parcial(df):
+def exibir_planilha_parcial(df: pd.DataFrame | None) -> None:
     if df is None or df.empty:
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhuma planilha carregada.")
         return
     VisualizadorPlanilhaDialog(df).exec_()
 
 
-def visualizar_logs_existentes():
+def visualizar_logs_existentes() -> None:
     """
     Lista todos os arquivos JSON de log no diretório Envios/ e,
     ao selecionar um, carrega o JSON e chama exibir_planilha_parcial.
@@ -7933,7 +7968,7 @@ def visualizar_logs_existentes():
         )
         return
 
-    logs = []
+    logs: list[tuple[str, str]] = []
     for ano in os.listdir(pasta_base):
         pasta_ano = os.path.join(pasta_base, ano)
         if not os.path.isdir(pasta_ano):
@@ -7959,7 +7994,7 @@ def visualizar_logs_existentes():
     for ano, arq in logs:
         lista.addItem(f"{ano} - {arq}")
 
-    def abrir_log():
+    def abrir_log() -> None:
         selected_items = lista.selectedItems()
         if not selected_items:
             return

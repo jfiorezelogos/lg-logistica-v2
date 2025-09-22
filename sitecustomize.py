@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import sys
+from typing import TextIO, cast  # ⬅️ importa TextIO e cast
 
 from common.logging_setup import set_correlation_id, setup_logging
 
@@ -28,7 +29,7 @@ class _StreamToLogger(io.TextIOBase):
         self.level = level
         self._buf = ""
 
-    def write(self, buf: str) -> int:
+    def write(self, buf: str) -> int:  # compatível com TextIO
         if not isinstance(buf, str):
             buf = str(buf)
         self._buf += buf
@@ -40,12 +41,16 @@ class _StreamToLogger(io.TextIOBase):
                 self.logger.log(self.level, line)
         return written
 
-    def flush(self) -> None:
+    def flush(self) -> None:  # compatível com TextIO
         if self._buf.strip():
             self.logger.log(self.level, self._buf.strip())
             self._buf = ""
 
+    # (opcional) ajuda ferramentas que consultam terminalidade
+    def isatty(self) -> bool:
+        return False
+
 
 if os.getenv("LOG_CAPTURE_STDOUT", "1") not in ("0", "false", "False"):
-    sys.stdout = _StreamToLogger(logging.getLogger("stdout"), logging.INFO)  # type: ignore[assignment]
-    sys.stderr = _StreamToLogger(logging.getLogger("stderr"), logging.ERROR)  # type: ignore[assignment]
+    sys.stdout = cast(TextIO, _StreamToLogger(logging.getLogger("stdout"), logging.INFO))
+    sys.stderr = cast(TextIO, _StreamToLogger(logging.getLogger("stderr"), logging.ERROR))

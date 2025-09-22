@@ -1,28 +1,17 @@
 from __future__ import annotations
 
 import random
+from functools import lru_cache
 from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
-
-try:
-    # urllib3 < 2.0
-    from urllib3.util.retry import Retry
-
-    _URLLIB3_V2 = False
-except Exception:
-    # urllib3 >= 2.0 (mesmo nome, mas alguns kwargs mudaram de comportamento)
-    from urllib3.util import Retry  # type: ignore
-
-    _URLLIB3_V2 = True
-
-from functools import lru_cache
+from urllib3.util.retry import Retry
 
 from .errors import ExternalError
 
 # (connect, read) em segundos — pode ser sobrescrito em cada chamada
-DEFAULT_TIMEOUT: tuple[float, float] = (5.0, 30.0)
+DEFAULT_TIMEOUT: tuple[int, int] = (5, 30)
 
 # Forcelist de status considerados transitórios
 TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
@@ -39,19 +28,28 @@ def _build_retry(
 ) -> Retry:
     """
     Cria política de retry exponencial com respeito a Retry-After (429/503).
+    Compatível com urllib3 novo (allowed_methods) e antigo (method_whitelist),
+    sem esbarrar no mypy.
     """
-    retry = Retry(
-        total=total,
-        connect=total,
-        read=total,
-        status=total,
-        backoff_factor=backoff_factor,
-        status_forcelist=statuses,
-        allowed_methods=methods,  # era 'method_whitelist' em versões antigas
-        raise_on_status=False,
-        respect_retry_after_header=True,
-    )
-    return retry
+    common_kwargs: dict[str, Any] = {
+        "total": total,
+        "connect": total,
+        "read": total,
+        "status": total,
+        "backoff_factor": backoff_factor,
+        "status_forcelist": statuses,
+        "raise_on_status": False,
+        "respect_retry_after_header": True,
+    }
+
+    # Primeiro tentamos com a API nova (allowed_methods)
+    try:
+        kwargs_new = {"allowed_methods": methods, **common_kwargs}
+        return Retry(**kwargs_new)
+    except TypeError:
+        # Fallback: API antiga (method_whitelist)
+        kwargs_old = {"method_whitelist": methods, **common_kwargs}
+        return Retry(**kwargs_old)
 
 
 def _build_session() -> requests.Session:
