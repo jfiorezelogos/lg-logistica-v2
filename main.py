@@ -17,21 +17,14 @@ import xml.etree.ElementTree as ET
 import zipfile
 from calendar import monthrange
 from collections import Counter, OrderedDict, defaultdict
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from functools import partial
 from json import JSONDecodeError
 from os import PathLike
 from threading import Event
-from typing import (
-    Any,
-    Literal,
-    Protocol,
-    TypedDict,
-    cast,
-)
+from typing import Any, Literal, Optional, Protocol, TypedDict, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -55,6 +48,7 @@ from PyQt5.QtCore import (
     QThread,
     QThreadPool,
     QTimer,
+    pyqtBoundSignal,
     pyqtSignal,
     pyqtSlot,
 )
@@ -5145,6 +5139,10 @@ def normalizar_transaction_id(valor):
 # Classes de Sinalização (Signals)
 
 
+class _SinalFinalizacao(Protocol):
+    finalizado: pyqtBoundSignal
+
+
 class ShopifySignals(QObject):
     resultado = pyqtSignal(dict)
     erro = pyqtSignal(str)
@@ -5158,6 +5156,11 @@ class SinaisObterCpf(QObject):
 class SinaisFulfill(QObject):
     concluido = pyqtSignal(str, int)  # order_id, qtd_itens
     erro = pyqtSignal(str, str)  # order_id, msg
+
+
+class _SinaisFulfill(Protocol):
+    concluido: pyqtBoundSignal  # .emit(str, int)
+    erro: pyqtBoundSignal  # .emit(str, str)
 
 
 class FinalizacaoProgressoSignal(QObject):
@@ -5182,17 +5185,17 @@ class ObterCpfShopifyRunnable(QRunnable):
         self._parent_correlation_id = get_correlation_id()
 
     @pyqtSlot()
-    def run(self):
+    def run(self) -> None:
         set_correlation_id(self._parent_correlation_id)
         logger.info("cpf_lookup_start", extra={"order_id": self.order_id})
-        cpf = ""
+        cpf: str = ""
         try:
             if self.estado["cancelador_global"].is_set():
                 logger.warning("cpf_lookup_cancelled_early", extra={"order_id": self.order_id})
                 return
 
             order_gid = f"gid://shopify/Order/{self.order_id}"
-            query = {
+            query: dict[str, str] = {
                 "query": f"""
                 {{
                     order(id: \"{order_gid}\") {{
@@ -5210,7 +5213,7 @@ class ObterCpfShopifyRunnable(QRunnable):
                 """
             }
 
-            headers = {
+            headers: dict[str, str] = {
                 "Content-Type": "application/json",
                 "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
             }
@@ -5234,17 +5237,17 @@ class ObterCpfShopifyRunnable(QRunnable):
                 return
 
             if resp.status_code == 200:
-                data = resp.json()
-                edges = (
+                data: dict[str, Any] = resp.json()
+                edges: list[dict[str, Any]] = (
                     data.get("data", {})
                     .get("order", {})
                     .get("localizationExtensions", {})
                     .get("edges", [])
                 )
                 for edge in edges:
-                    node = edge.get("node", {})
-                    if node.get("purpose") == "TAX" and "cpf" in node.get("title", "").lower():
-                        cpf = re.sub(r"\D", "", node.get("value", ""))[:11]
+                    node: dict[str, Any] = edge.get("node", {})  # type: ignore[assignment]
+                    if node.get("purpose") == "TAX" and "cpf" in str(node.get("title", "")).lower():
+                        cpf = re.sub(r"\D", "", str(node.get("value", "")))[:11]
                         break
             else:
                 logger.warning(
@@ -5281,15 +5284,25 @@ class ObterCpfShopifyRunnable(QRunnable):
                     )
 
 
+class _FulfillmentOrderLineItem(TypedDict):
+    id: str
+    quantity: int
+
+
+class _FulfillmentByOrder(TypedDict):
+    fulfillmentOrderId: str
+    fulfillmentOrderLineItems: list[_FulfillmentOrderLineItem]
+
+
 class FulfillPedidoRunnable(QRunnable):
-    def __init__(self, order_id, itens_line_ids):
+    def __init__(self, order_id: str, itens_line_ids: list[str] | set[str]) -> None:
         super().__init__()
-        self.order_id = normalizar_transaction_id(order_id)
-        self.itens_line_ids = set(map(normalizar_transaction_id, itens_line_ids))  # normaliza aqui
-        self.signals = SinaisFulfill()
+        self.order_id: str = normalizar_transaction_id(order_id)
+        self.itens_line_ids: set[str] = {normalizar_transaction_id(item) for item in itens_line_ids}
+        self.signals: _SinaisFulfill = SinaisFulfill()
 
     @pyqtSlot()
-    def run(self):
+    def run(self) -> None:
         try:
             order_gid = f"gid://shopify/Order/{self.order_id}"
             query_fo = """
@@ -5316,17 +5329,21 @@ class FulfillPedidoRunnable(QRunnable):
             }
             """
 
-            headers = {
+            headers: dict[str, str] = {
                 "Content-Type": "application/json",
                 "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
             }
 
-            with controle_shopify["lock"]:
-                delta = time.time() - controle_shopify["ultimo_acesso"]
+            # controle de taxa global (estrutura externa)
+            ctrl = cast(MutableMapping[str, Any], controle_shopify)
+            lock = cast(Any, ctrl["lock"])  # geralmente threading.Lock
+            with lock:
+                delta = float(time.time() - cast(float, ctrl.get("ultimo_acesso", 0.0)))
                 if delta < MIN_INTERVALO_GRAPHQL:
                     time.sleep(MIN_INTERVALO_GRAPHQL - delta)
-                controle_shopify["ultimo_acesso"] = time.time()
+                ctrl["ultimo_acesso"] = time.time()
 
+            # 1) Buscar fulfillmentOrders
             with requests.Session() as sess:
                 sess.headers.update(headers)
                 r1 = sess.post(
@@ -5337,44 +5354,54 @@ class FulfillPedidoRunnable(QRunnable):
                 )
 
             if r1.status_code != 200:
-                raise Exception(f"Erro HTTP {r1.status_code} na consulta")
+                raise RuntimeError(f"Erro HTTP {r1.status_code} na consulta")
 
-            dados = r1.json()
-            orders = dados["data"]["order"]["fulfillmentOrders"]["edges"]
+            dados = cast(dict[str, Any], r1.json())
+            orders = cast(
+                list[dict[str, Any]],
+                ((dados.get("data") or {}).get("order") or {})
+                .get("fulfillmentOrders", {})
+                .get("edges", []),
+            )
 
-            fulfillment_payloads = []
+            fulfillment_payloads: list[_FulfillmentByOrder] = []
 
             for edge in orders:
-                node = edge["node"]
-                if node["status"] != "OPEN":
+                node = cast(dict[str, Any], edge.get("node") or {})
+                if (node.get("status") or "").upper() != "OPEN":
                     continue
-                items = []
-                for li in node["lineItems"]["edges"]:
-                    li_node = li["node"]
-                    line_item_gid = li_node["lineItem"]["id"]
-                    line_item_id = normalizar_transaction_id(line_item_gid)
 
-                    if line_item_id in self.itens_line_ids and li_node["remainingQuantity"] > 0:
-                        items.append(
-                            {
-                                "id": li_node["id"],  # fulfillment line item ID
-                                "quantity": li_node["remainingQuantity"],
-                            }
-                        )
+                items: list[_FulfillmentOrderLineItem] = []
+                li_edges = cast(
+                    list[dict[str, Any]],
+                    ((node.get("lineItems") or {}).get("edges") or []),
+                )
+                for li in li_edges:
+                    li_node = cast(dict[str, Any], li.get("node") or {})
+                    line_item_gid = str((li_node.get("lineItem") or {}).get("id", ""))
+                    line_item_id = normalizar_transaction_id(line_item_gid)
+                    remaining = int(li_node.get("remainingQuantity") or 0)
+
+                    if line_item_id in self.itens_line_ids and remaining > 0:
+                        items.append({"id": str(li_node.get("id", "")), "quantity": remaining})
                     else:
                         print(
-                            f"[🔍] Ignorado: lineItem.id = {line_item_id}, restante = {li_node['remainingQuantity']}"
+                            f"[🔍] Ignorado: lineItem.id = {line_item_id}, restante = {remaining}"
                         )
 
                 if items:
                     fulfillment_payloads.append(
-                        {"fulfillmentOrderId": node["id"], "fulfillmentOrderLineItems": items}
+                        {
+                            "fulfillmentOrderId": str(node.get("id", "")),
+                            "fulfillmentOrderLineItems": items,
+                        }
                     )
 
             if not fulfillment_payloads:
                 self.signals.erro.emit(self.order_id, "Nada a enviar")
                 return
 
+            # 2) Criar fulfillment
             mutation = """
             mutation fulfillmentCreate($fulfillment: FulfillmentV2Input!) {
               fulfillmentCreateV2(fulfillment: $fulfillment) {
@@ -5402,17 +5429,23 @@ class FulfillPedidoRunnable(QRunnable):
                 )
 
             if r2.status_code != 200:
-                raise Exception(f"Erro HTTP {r2.status_code} na mutation")
+                raise RuntimeError(f"Erro HTTP {r2.status_code} na mutation")
 
-            resp = r2.json()
-            user_errors = resp["data"]["fulfillmentCreateV2"]["userErrors"]
+            resp = cast(dict[str, Any], r2.json())
+            user_errors = cast(
+                list[dict[str, Any]],
+                ((resp.get("data") or {}).get("fulfillmentCreateV2") or {}).get("userErrors", []),
+            )
             if user_errors:
-                erros_msg = "; ".join(f"{e['field']} → {e['message']}" for e in user_errors)
-                self.signals.erro.emit(self.order_id, erros_msg)
+                erros_msg = "; ".join(
+                    f"{('/'.join(map(str, (e.get('field') or []))))} → {e.get('message')}"
+                    for e in user_errors
+                )
+                self.signals.erro.emit(self.order_id, erros_msg or "Erro na criação do fulfillment")
                 return
 
             qtd_total = sum(
-                item["quantity"]
+                int(item["quantity"])
                 for fo in fulfillment_payloads
                 for item in fo["fulfillmentOrderLineItems"]
             )
@@ -5422,101 +5455,133 @@ class FulfillPedidoRunnable(QRunnable):
             self.signals.erro.emit(self.order_id, str(e))
 
 
+class EnderecoResultado(TypedDict, total=False):
+    endereco_base: str
+    numero: str
+    complemento: str
+    precisa_contato: str  # "SIM" | "NÃO"
+    logradouro_oficial: str
+    bairro_oficial: str
+    raw_address1: str
+    raw_address2: str
+
+
 class NormalizarEnderecoRunnable(QRunnable):
     def __init__(
-        self, order_id, endereco_raw, complemento_raw, callback, sinal_finalizacao, estado
-    ):
+        self,
+        order_id: str,
+        endereco_raw: str | None,
+        complemento_raw: str | None,
+        callback: Callable[[str, EnderecoResultado], None],
+        sinal_finalizacao: _SinalFinalizacao | None,
+        estado: MutableMapping[str, Any],
+    ) -> None:
         super().__init__()
-        self.order_id = normalizar_transaction_id(order_id)
-        self.endereco_raw = endereco_raw or ""
-        self.complemento_raw = complemento_raw or ""
-        self.callback = callback
-        self.sinal_finalizacao = sinal_finalizacao
-        self.estado = estado
+        self.order_id: str = normalizar_transaction_id(order_id)
+        self.endereco_raw: str = (endereco_raw or "").strip()
+        self.complemento_raw: str = (complemento_raw or "").strip()
+        self.callback: Callable[[str, EnderecoResultado], None] = callback
+        self.sinal_finalizacao: _SinalFinalizacao | None = sinal_finalizacao
+        self.estado: MutableMapping[str, Any] = estado
 
     @pyqtSlot()
-    def run(self):
+    def run(self) -> None:
         pedido_id = self.order_id  # já normalizado
-
         try:
             logger.info("addr_norm_thread_started", extra={"order_id": pedido_id})
 
-            if self.estado.get("finalizou_endereco"):
+            # cancelador
+            cancelador = cast(threading.Event | None, self.estado.get("cancelador_global"))
+
+            if cast(bool, self.estado.get("finalizou_endereco", False)):
                 logger.debug("addr_norm_skipped_already_finished", extra={"order_id": pedido_id})
                 return
 
-            if self.estado.get("cancelador_global", threading.Event()).is_set():
+            if cancelador is not None and cancelador.is_set():
                 logger.info("addr_norm_cancelled_early", extra={"order_id": pedido_id})
                 return
 
-            cep = self.estado.get("cep_por_pedido", {}).get(pedido_id, "").replace("-", "").strip()
+            # CEP (opcional, com cache)
+            cep = (
+                str(self.estado.get("cep_por_pedido", {}).get(pedido_id, ""))
+                .replace("-", "")
+                .strip()
+            )
+            logradouro_cep = ""
+            bairro_cep = ""
+
             if not cep:
                 logger.warning("addr_norm_missing_cep", extra={"order_id": pedido_id})
-                logradouro_cep = ""
-                bairro_cep = ""
             else:
-                cep_info_cache = self.estado.get("cep_info_por_pedido", {}).get(pedido_id)
-                if cep_info_cache:
-                    logradouro_cep = cep_info_cache.get("street", "")
-                    bairro_cep = cep_info_cache.get("district", "")
+                cep_info_cache = cast(
+                    dict[str, Any], self.estado.get("cep_info_por_pedido", {})
+                ).get(pedido_id)
+                if isinstance(cep_info_cache, dict) and cep_info_cache:
+                    logradouro_cep = str(cep_info_cache.get("street", "") or "")
+                    bairro_cep = str(cep_info_cache.get("district", "") or "")
                     logger.debug("addr_norm_cep_cache_hit", extra={"order_id": pedido_id})
                 else:
                     try:
-                        cep_info = buscar_cep_com_timeout(cep)
-                        logradouro_cep = cep_info.get("street", "")
-                        bairro_cep = cep_info.get("district", "")
+                        cep_info = buscar_cep_com_timeout(cep)  # Dict[str, Any]
+                        logradouro_cep = str(cep_info.get("street", "") or "")
+                        bairro_cep = str(cep_info.get("district", "") or "")
                         self.estado.setdefault("cep_info_por_pedido", {})[pedido_id] = cep_info
                         logger.debug("addr_norm_cep_fetched", extra={"order_id": pedido_id})
                     except Exception as e:
                         logger.error(
                             "addr_norm_cep_error", extra={"order_id": pedido_id, "err": str(e)}
                         )
-                        logradouro_cep = ""
-                        bairro_cep = ""
 
-            if self.estado.get("cancelador_global", threading.Event()).is_set():
+            if cancelador is not None and cancelador.is_set():
                 logger.info("addr_norm_cancelled_mid", extra={"order_id": pedido_id})
                 return
 
+            # Heurística: endereço já parece completo?
+            precisa: bool = False  # default; pode ser alterado nos ramos abaixo
             if endereco_parece_completo(self.endereco_raw):
                 partes = [p.strip() for p in self.endereco_raw.split(",", 1)]
                 base = partes[0]
                 numero = partes[1] if len(partes) > 1 else "s/n"
-                complemento = self.complemento_raw.strip()
-                precisa = False
+                complemento = self.complemento_raw
                 logger.debug(
                     "addr_norm_direct_ok",
                     extra={"order_id": pedido_id, "base": base, "numero": numero},
                 )
             else:
-                resposta = usar_gpt_callback(
-                    address1=self.endereco_raw,
-                    address2=self.complemento_raw,
-                    logradouro_cep=logradouro_cep,
-                    bairro_cep=bairro_cep,
+                # Chamada ao GPT helper (tipamos como Mapping[str, Any])
+                resposta = cast(
+                    Mapping[str, Any],
+                    usar_gpt_callback(
+                        address1=self.endereco_raw,
+                        address2=self.complemento_raw,
+                        logradouro_cep=logradouro_cep,
+                        bairro_cep=bairro_cep,
+                    ),
                 )
 
-                if self.estado.get("cancelador_global", threading.Event()).is_set():
+                if cancelador is not None and cancelador.is_set():
                     return
 
-                base = resposta.get("base", "").strip()
-                numero = resposta.get("numero", "").strip()
+                base = str(resposta.get("base", "") or "").strip()
+                numero = str(resposta.get("numero", "") or "").strip()
                 if not re.match(r"^\d+[A-Za-z]?$", numero):
                     numero = "s/n"
                     precisa = True
-                complemento = resposta.get("complemento", "") or self.complemento_raw.strip()
+
+                complemento = str(resposta.get("complemento", "") or self.complemento_raw).strip()
                 if complemento.strip() == numero.strip():
                     complemento = ""
-                precisa = resposta.get("precisa_contato", True)
 
-                # segurança adicional com logradouro do CEP
+                precisa = bool(resposta.get("precisa_contato", True))
+
+                # Segurança adicional com logradouro do CEP
                 if logradouro_cep:
                     base_normalizada = normalizar(base)
                     logradouro_normalizado = normalizar(logradouro_cep)
                     if logradouro_normalizado not in base_normalizada:
                         base = logradouro_cep.strip()
 
-            resultado = {
+            resultado: EnderecoResultado = {
                 "endereco_base": base,
                 "numero": numero,
                 "complemento": complemento,
@@ -5532,10 +5597,10 @@ class NormalizarEnderecoRunnable(QRunnable):
 
         except Exception as e:
             logger.exception("addr_norm_exception", extra={"order_id": pedido_id, "err": str(e)})
-            fallback = {
+            fallback: EnderecoResultado = {
                 "endereco_base": self.endereco_raw,
                 "numero": "s/n",
-                "complemento": self.complemento_raw.strip(),
+                "complemento": self.complemento_raw,
                 "precisa_contato": "SIM",
                 "logradouro_oficial": "",
                 "bairro_oficial": "",
@@ -5550,9 +5615,11 @@ class NormalizarEnderecoRunnable(QRunnable):
 
         finally:
             try:
-                pendentes = self.estado.get("endereco_pendentes", set())
+                pendentes = cast(set[str], self.estado.get("endereco_pendentes", set()))
                 if pedido_id in pendentes:
                     pendentes.discard(pedido_id)
+                    # mantém de volta no estado para não perder a referência de tipo
+                    self.estado["endereco_pendentes"] = pendentes
                     logger.debug("addr_norm_pending_removed", extra={"order_id": pedido_id})
                 else:
                     logger.debug("addr_norm_pending_already_gone", extra={"order_id": pedido_id})
@@ -5561,32 +5628,47 @@ class NormalizarEnderecoRunnable(QRunnable):
                     "addr_norm_pending_remove_error", extra={"order_id": pedido_id, "err": str(e)}
                 )
 
-            try:
-                self.sinal_finalizacao.finalizado.emit()
-                logger.debug("addr_norm_final_signal", extra={"order_id": pedido_id})
-            except Exception as e:
-                logger.exception(
-                    "addr_norm_final_signal_error", extra={"order_id": pedido_id, "err": str(e)}
-                )
+            if self.sinal_finalizacao is not None:
+                try:
+                    sig = self.sinal_finalizacao.finalizado
+                    emitter = getattr(sig, "emit", None)
+                    if callable(emitter):
+                        emitter()
+                    elif callable(sig):
+                        sig()
+                    logger.debug("addr_norm_final_signal", extra={"order_id": pedido_id})
+                except Exception as e:
+                    logger.exception(
+                        "addr_norm_final_signal_error", extra={"order_id": pedido_id, "err": str(e)}
+                    )
 
 
 class BuscarBairroRunnable(QRunnable):
-    def __init__(self, order_id, cep, df, callback, estado, sinal_finalizacao=None):
+    def __init__(
+        self,
+        order_id: str,
+        cep: str,
+        df: pd.DataFrame,
+        callback: Callable[[str, str], None],
+        estado: MutableMapping[str, Any],
+        sinal_finalizacao: _SinalFinalizacao | None = None,
+    ) -> None:
         super().__init__()
-        self.order_id = normalizar_transaction_id(order_id)
-        self.cep = cep
-        self.df = df
-        self.callback = callback
-        self.estado = estado
-        self.sinal_finalizacao = sinal_finalizacao
-        self._parent_correlation_id = get_correlation_id()
+        self.order_id: str = normalizar_transaction_id(order_id)
+        self.cep: str = cep
+        self.df: pd.DataFrame = df
+        self.callback: Callable[[str, str], None] = callback
+        self.estado: MutableMapping[str, Any] = estado
+        self.sinal_finalizacao: _SinalFinalizacao | None = sinal_finalizacao
+        self._parent_correlation_id: str = get_correlation_id()
 
     @pyqtSlot()
-    def run(self):
+    def run(self) -> None:
         set_correlation_id(self._parent_correlation_id)
         logger.info("bairro_lookup_start", extra={"order_id": self.order_id})
         try:
-            if self.estado["cancelador_global"].is_set():
+            cancelador = cast(threading.Event | None, self.estado.get("cancelador_global"))
+            if cancelador is not None and cancelador.is_set():
                 logger.warning("bairro_lookup_cancelled_early", extra={"order_id": self.order_id})
                 return
 
@@ -5594,19 +5676,21 @@ class BuscarBairroRunnable(QRunnable):
             if len(cep_limpo) != 8:
                 raise ValueError("CEP inválido")
 
-            endereco = buscar_cep_com_timeout(cep_limpo)
+            endereco: dict[str, Any] = buscar_cep_com_timeout(cep_limpo)
 
-            if self.estado["cancelador_global"].is_set():
+            if cancelador is not None and cancelador.is_set():
                 logger.warning(
                     "bairro_lookup_cancelled_after_fetch", extra={"order_id": self.order_id}
                 )
                 return
 
-            bairro = endereco.get("district", "").strip()
-            cidade = endereco.get("city", "").strip()
-            uf = endereco.get("uf", "").strip()
+            bairro = cast(str, (endereco.get("district") or "")).strip()
+            cidade = cast(str, (endereco.get("city") or "")).strip()
+            uf = cast(str, (endereco.get("uf") or "")).strip()
 
+            # Seleciona as linhas do pedido
             idx = self.df["transaction_id"].astype(str).str.strip() == self.order_id
+
             if bairro:
                 self.df.loc[idx, "Bairro Comprador"] = bairro
                 self.df.loc[idx, "Bairro Entrega"] = bairro
@@ -5617,16 +5701,18 @@ class BuscarBairroRunnable(QRunnable):
                 self.df.loc[idx, "UF Comprador"] = uf
                 self.df.loc[idx, "UF Entrega"] = uf
 
-            if self.estado["cancelador_global"].is_set():
+            if cancelador is not None and cancelador.is_set():
                 logger.warning(
                     "bairro_lookup_cancelled_before_callback", extra={"order_id": self.order_id}
                 )
                 return
 
+            # callback(pid, bairro)
             self.callback(self.order_id, bairro or "")
 
         except Exception:
-            if self.estado["cancelador_global"].is_set():
+            cancelador = cast(threading.Event | None, self.estado.get("cancelador_global"))
+            if cancelador is not None and cancelador.is_set():
                 logger.warning(
                     "bairro_lookup_cancelled_during_exception", extra={"order_id": self.order_id}
                 )
@@ -5637,7 +5723,9 @@ class BuscarBairroRunnable(QRunnable):
 
         finally:
             try:
-                self.estado["bairro_pendentes"].discard(self.order_id)
+                pendentes = cast(set[str], self.estado.get("bairro_pendentes", set()))
+                pendentes.discard(self.order_id)
+                self.estado["bairro_pendentes"] = pendentes  # mantém no estado
                 logger.debug("bairro_lookup_popped_from_pending", extra={"order_id": self.order_id})
             except Exception as e:
                 logger.exception(
@@ -5645,7 +5733,7 @@ class BuscarBairroRunnable(QRunnable):
                     extra={"order_id": self.order_id, "err": str(e)},
                 )
 
-            if self.sinal_finalizacao:
+            if self.sinal_finalizacao is not None:
                 try:
                     self.sinal_finalizacao.finalizado.emit()
                     logger.debug("bairro_lookup_final_signal", extra={"order_id": self.order_id})
@@ -5656,14 +5744,24 @@ class BuscarBairroRunnable(QRunnable):
                     )
 
 
+# ---- aliases de tipos para legibilidade ----
+Pedido = dict[str, Any]
+ThrottleStatus = dict[str, float]
+
+
 class BuscarPedidosPagosRunnable(QRunnable):
-    def __init__(self, data_inicio_str, estado, fulfillment_status="any"):
+    def __init__(
+        self,
+        data_inicio_str: str,
+        estado: MutableMapping[str, Any],
+        fulfillment_status: str = "any",
+    ) -> None:
         super().__init__()
-        self.data_inicio_str = data_inicio_str
-        self.fulfillment_status = fulfillment_status
-        self.sinais = SinaisBuscarPedidos()
-        self.estado = estado
-        self._parent_correlation_id = get_correlation_id()
+        self.data_inicio_str: str = data_inicio_str
+        self.fulfillment_status: str = fulfillment_status
+        self.sinais: SinaisBuscarPedidos = SinaisBuscarPedidos()
+        self.estado: MutableMapping[str, Any] = estado
+        self._parent_correlation_id: str = get_correlation_id()
 
         # ✅ salva o modo selecionado para uso no tratar_resultado
         self.estado["fulfillment_status_selecionado"] = (
@@ -5671,8 +5769,10 @@ class BuscarPedidosPagosRunnable(QRunnable):
         )
 
         # memória de custos/limites para rate-limit pró-ativo
-        self._ultimo_requested_cost = 150.0  # palpite inicial
-        self._ultimo_throttle_status = None  # dict: maximumAvailable/currentlyAvailable/restoreRate
+        self._ultimo_requested_cost: float = 150.0  # palpite inicial
+        self._ultimo_throttle_status: ThrottleStatus | None = (
+            None  # maximumAvailable/currentlyAvailable/restoreRate
+        )
 
         # garante estruturas básicas no estado (evita KeyError)
         self.estado.setdefault("dados_temp", {})
@@ -5686,18 +5786,18 @@ class BuscarPedidosPagosRunnable(QRunnable):
     # ---- helper: imprime contexto e emite sinal de erro ----
     def _log_erro(
         self,
-        titulo,
-        detalhe=None,
+        titulo: str,
+        detalhe: str | None = None,
         exc: Exception | None = None,
         resp: requests.Response | None = None,
-        extra_ctx: dict | None = None,
-    ):
+        extra_ctx: dict[str, Any] | None = None,
+    ) -> None:
         print("\n" + "═" * 80)
         print(f"[❌] {titulo}")
         if detalhe:
             print(f"[📝] Detalhe: {detalhe}")
 
-        ctx = {
+        ctx: dict[str, Any] = {
             "cursor": (extra_ctx or {}).get("cursor"),
             "fulfillment_status": (self.fulfillment_status or "").strip().lower(),
             "query": (extra_ctx or {}).get("query"),
@@ -5728,6 +5828,8 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 if isinstance(payload, dict) and "errors" in payload:
                     print("[🧩] GraphQL errors:")
                     for i, err in enumerate(payload.get("errors", []), start=1):
+                        if not isinstance(err, dict):
+                            continue
                         print(f"   {i:02d}. {err.get('message')}")
                         if "extensions" in err:
                             print(f"       extensions: {err.get('extensions')}")
@@ -5747,10 +5849,11 @@ class BuscarPedidosPagosRunnable(QRunnable):
         msg_ui = titulo
         if detalhe:
             msg_ui += f" - {detalhe}"
+        # sinais é PyQt; deixamos tipado como Any para mypy não barrar o .emit
         self.sinais.erro.emit(f"❌ {msg_ui}")
 
     # --- helper: quanto esperar para ter 'needed' créditos disponíveis ---
-    def _calc_wait_seconds(self, throttle_status: dict, needed: float) -> float:
+    def _calc_wait_seconds(self, throttle_status: Mapping[str, Any] | None, needed: float) -> float:
         if not throttle_status:
             return 0.0
         try:
@@ -5764,7 +5867,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
         return max(0.0, deficit / restore)
 
     # --- helper: esperar pró-ativamente antes da requisição ---
-    def _esperar_creditos_se_preciso(self):
+    def _esperar_creditos_se_preciso(self) -> None:
         needed = max(50.0, float(self._ultimo_requested_cost or 100.0))
         wait_s = self._calc_wait_seconds(self._ultimo_throttle_status, needed)
         if wait_s > 0:
@@ -5772,8 +5875,9 @@ class BuscarPedidosPagosRunnable(QRunnable):
             time.sleep(wait_s)
 
     # --- helper: extrair infos de custo/throttle do payload e guardar ---
-    def _atualizar_custos(self, payload: dict):
-        cost = (payload or {}).get("extensions", {}).get("cost", {}) or {}
+    def _atualizar_custos(self, payload: Mapping[str, Any]) -> None:
+        extensions = cast(dict[str, Any], (payload or {}).get("extensions", {}))
+        cost = cast(dict[str, Any], extensions.get("cost", {}) or {})
         req_cost = cost.get("requestedQueryCost")
         act_cost = cost.get("actualQueryCost")
         if req_cost is not None:
@@ -5781,17 +5885,20 @@ class BuscarPedidosPagosRunnable(QRunnable):
         elif act_cost is not None:
             self._ultimo_requested_cost = float(act_cost)
 
-        throttle = cost.get("throttleStatus") or {}
+        throttle = cast(dict[str, Any], cost.get("throttleStatus") or {})
         if throttle:
             self._ultimo_throttle_status = {
-                "maximumAvailable": throttle.get("maximumAvailable"),
-                "currentlyAvailable": throttle.get("currentlyAvailable"),
-                "restoreRate": throttle.get("restoreRate"),
+                "maximumAvailable": float(throttle.get("maximumAvailable", 0) or 0.0),
+                "currentlyAvailable": float(throttle.get("currentlyAvailable", 0) or 0.0),
+                "restoreRate": float(throttle.get("restoreRate", 0) or 0.0),
             }
+        else:
+            self._ultimo_throttle_status = None
 
     @pyqtSlot()
-    def run(self):
+    def run(self) -> None:
         set_correlation_id(self._parent_correlation_id)
+
         logger.info(
             "coleta_lookup_start",
             extra={
@@ -5799,7 +5906,9 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 "fulfillment_status": (self.fulfillment_status or "").strip().lower(),
             },
         )
-        if self.estado["cancelador_global"].is_set():
+
+        cancelador = cast(threading.Event | None, self.estado.get("cancelador_global"))
+        if cancelador is not None and cancelador.is_set():
             logger.warning("shopify_fetch_cancelled_early")
             return
 
@@ -5810,26 +5919,26 @@ class BuscarPedidosPagosRunnable(QRunnable):
             self._log_erro("Data inválida", detalhe=str(e), exc=e)
             return
 
-        cursor = None
-        pedidos = []
+        cursor: str | None = None
+        pedidos: list[Pedido] = []
 
         # ------- Fulfillment status: só "any" ou "unfulfilled" -------
         fs = (self.fulfillment_status or "").strip().lower()
 
         # Monta a search query base
-        filtros = ["financial_status:paid"]
+        filtros: list[str] = ["financial_status:paid"]
         if fs == "unfulfilled":
             filtros.append("fulfillment_status:unfulfilled")
 
         # ✅ filtro de data somente por INÍCIO (ligado por padrão)
-        if self.estado.get("usar_filtro_data", True):
+        if cast(bool, self.estado.get("usar_filtro_data", True)):
             filtros.append(f'created_at:>={data_inicio.strftime("%Y-%m-%d")}')
 
         query_str = " ".join(filtros)
         logger.debug("shopify_query", extra={"query": query_str})
 
         # Query usando variável $search (evita problemas de escape)
-        query_template = """
+        query_template: str = """
         query($cursor: String, $search: String) {
           orders(first: 50, after: $cursor, query: $search) {
             pageInfo { hasNextPage endCursor }
@@ -5881,13 +5990,13 @@ class BuscarPedidosPagosRunnable(QRunnable):
         }
         """
 
-        headers = {
+        headers: dict[str, str] = {
             "Content-Type": "application/json",
             "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
         }
 
         while True:
-            if self.estado["cancelador_global"].is_set():
+            if cancelador is not None and cancelador.is_set():
                 logger.warning("shopify_fetch_cancelled_midloop")
                 break
 
@@ -5920,7 +6029,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 )
                 return
 
-            if self.estado["cancelador_global"].is_set():
+            if cancelador is not None and cancelador.is_set():
                 logger.warning("shopify_fetch_cancelled_after_request")
                 break
 
@@ -5930,7 +6039,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 logger.warning("shopify_http_429", extra={"retry_after": retry})
                 time.sleep(retry)
                 continue
-            elif resp.status_code != 200:
+            if resp.status_code != 200:
                 self._log_erro(
                     f"Erro HTTP {resp.status_code}",
                     detalhe=resp.text[:200],
@@ -5941,7 +6050,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
 
             # --- JSON ---
             try:
-                payload = resp.json()
+                payload = cast(dict[str, Any], resp.json())
             except ValueError as e:
                 self._log_erro(
                     "Resposta não é JSON válido",
@@ -5956,8 +6065,10 @@ class BuscarPedidosPagosRunnable(QRunnable):
 
             # --- Erros GraphQL? ---
             if "errors" in payload:
-                erro = payload["errors"][0] if payload["errors"] else {}
-                code = ((erro.get("extensions") or {}).get("code") or "").upper()
+                first = payload["errors"][0] if payload["errors"] else {}
+                code = ""
+                if isinstance(first, dict):
+                    code = ((first.get("extensions") or {}).get("code") or "").upper()
 
                 if code == "THROTTLED":
                     needed = float(self._ultimo_requested_cost or 100.0)
@@ -5983,30 +6094,39 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 )
                 return
 
-            data = (payload.get("data") or {}).get("orders", {}) or {}
-            novos = []
+            data = cast(dict[str, Any], (payload.get("data") or {})).get("orders", {}) or {}
+            novos: list[Pedido] = []
 
-            for edge in data.get("edges", []):
-                if self.estado["cancelador_global"].is_set():
+            for edge in cast(list[dict[str, Any]], data.get("edges", []) or []):
+                if cancelador is not None and cancelador.is_set():
                     logger.warning("shopify_fetch_cancelled_processing")
                     break
 
-                pedido = edge["node"]
+                pedido = cast(Pedido, edge.get("node", {}))
+                if not pedido:
+                    continue
 
                 # (loop de itens mantido apenas se quiser depurar algo)
-                itens = (pedido.get("lineItems") or {}).get("edges", []) or []
-                for item_edge in itens:
-                    item = item_edge.get("node") or {}
+                itens = cast(dict[str, Any], pedido.get("lineItems") or {}).get("edges", []) or []
+                for item_edge in cast(list[dict[str, Any]], itens):
+                    item = cast(dict[str, Any], item_edge.get("node") or {})
                     _ = item.get("title", "")
                     _ = item.get("quantity", "")
-                    _ = str((item.get("product") or {}).get("id", "")).split("/")[-1]
+                    _ = str(cast(dict[str, Any], item.get("product") or {}).get("id", "")).split(
+                        "/"
+                    )[-1]
 
                 # CPF via localizationExtensions
                 cpf = ""
                 try:
-                    extensoes = (pedido.get("localizationExtensions") or {}).get("edges", []) or []
-                    for ext in extensoes:
-                        node = ext.get("node", {}) or {}
+                    extensoes = (
+                        cast(dict[str, Any], pedido.get("localizationExtensions") or {}).get(
+                            "edges", []
+                        )
+                        or []
+                    )
+                    for ext in cast(list[dict[str, Any]], extensoes):
+                        node = cast(dict[str, Any], ext.get("node", {}) or {})
                         if (
                             node.get("purpose") == "TAX"
                             and "cpf" in (node.get("title", "") or "").lower()
@@ -6026,55 +6146,66 @@ class BuscarPedidosPagosRunnable(QRunnable):
 
             pedidos.extend(novos)
 
-            if not data.get("pageInfo", {}).get("hasNextPage"):
+            page_info = cast(dict[str, Any], data.get("pageInfo") or {})
+            if not page_info.get("hasNextPage"):
                 break
+            cursor = cast(str | None, page_info.get("endCursor"))
 
-            cursor = data.get("pageInfo", {}).get("endCursor")
-
-        if self.estado["cancelador_global"].is_set():
+        if cancelador is not None and cancelador.is_set():
             logger.warning("shopify_fetch_cancelled_end")
             return
 
         logger.info("shopify_fetch_done", extra={"qtd_pedidos": len(pedidos)})
 
         # Armazenando os dados coletados temporariamente no estado
+        dados_temp = cast(dict[str, Any], self.estado["dados_temp"])
         for pedido in pedidos:
-            pedido_id = normalizar_transaction_id(pedido["id"])
-            self.estado["dados_temp"]["cpfs"][pedido_id] = pedido.get("cpf_extraido", "")
-            self.estado["dados_temp"]["bairros"][pedido_id] = ""
-            end = pedido.get("shippingAddress") or {}
-            self.estado["dados_temp"]["enderecos"][pedido_id] = {
+            pid_raw = cast(str, pedido.get("id", ""))
+            pedido_id = normalizar_transaction_id(pid_raw)
+            dados_temp["cpfs"][pedido_id] = pedido.get("cpf_extraido", "")
+            dados_temp["bairros"][pedido_id] = ""
+            end = cast(dict[str, Any], pedido.get("shippingAddress") or {})
+            dados_temp["enderecos"][pedido_id] = {
                 "endereco_base": end.get("address1", ""),
                 "numero": end.get("address2", ""),
                 "complemento": end.get("provinceCode", ""),
             }
 
             # status fulfillment
-            status_fulfillment = (pedido.get("displayFulfillmentStatus") or "").strip().upper()
-            self.estado["dados_temp"]["status_fulfillment"][pedido_id] = status_fulfillment
+            status_fulfillment = (
+                (cast(str, pedido.get("displayFulfillmentStatus") or "")).strip().upper()
+            )
+            dados_temp["status_fulfillment"][pedido_id] = status_fulfillment
 
             # frete (robusto a None)
-            valor_frete = (
-                ((pedido.get("shippingLine") or {}).get("discountedPriceSet") or {}).get(
-                    "shopMoney", {}
-                )
-            ).get("amount")
+            valor_frete_any = (
+                cast(dict[str, Any], (pedido.get("shippingLine") or {})).get("discountedPriceSet")
+                or {}
+            ).get("shopMoney", {})
+            valor_frete = 0.0
             try:
-                valor_frete = float(valor_frete) if valor_frete is not None else 0.0
+                amount = cast(dict[str, Any], valor_frete_any).get("amount")
+                valor_frete = float(amount) if amount is not None else 0.0
             except Exception:
                 valor_frete = 0.0
-            self.estado["dados_temp"]["fretes"][pedido_id] = valor_frete
+            dados_temp["fretes"][pedido_id] = valor_frete
 
             # desconto (robusto a None)
-            valor_desconto = (
-                (pedido.get("currentTotalDiscountsSet") or {}).get("shopMoney") or {}
-            ).get("amount")
+            valor_desc_any = (
+                cast(dict[str, Any], (pedido.get("currentTotalDiscountsSet") or {})).get(
+                    "shopMoney"
+                )
+                or {}
+            )
+            valor_desconto = 0.0
             try:
-                valor_desconto = float(valor_desconto) if valor_desconto is not None else 0.0
+                amount_d = cast(dict[str, Any], valor_desc_any).get("amount")
+                valor_desconto = float(amount_d) if amount_d is not None else 0.0
             except Exception:
                 valor_desconto = 0.0
-            self.estado["dados_temp"]["descontos"][pedido_id] = valor_desconto
+            dados_temp["descontos"][pedido_id] = valor_desconto
 
+        # sinais PyQt (ignoramos tipagem do .emit)
         self.sinais.resultado.emit(pedidos)
 
 
@@ -6221,14 +6352,20 @@ class VerificadorDeEtapa(QObject):
 # Funções auxiliares shopify
 
 
-def limpar_telefone(tel):
+def limpar_telefone(tel: str | None) -> str:
+    """
+    Remove caracteres não numéricos de um telefone e corta o prefixo '55'.
+    """
     return re.sub(r"\D", "", tel or "").removeprefix("55")
 
 
 busca_cep_lock = threading.Lock()
 
 
-def buscar_cep_com_timeout(cep, timeout=5):
+def buscar_cep_com_timeout(cep: str, timeout: int = 5) -> dict[str, Any]:
+    """
+    Consulta um CEP com timeout. Retorna um dicionário de endereço ou {} em caso de erro.
+    """
     try:
         # sem lock global, sem sleep serializador
         return get_address_from_cep(cep, timeout=timeout)
@@ -6242,18 +6379,27 @@ def buscar_cep_com_timeout(cep, timeout=5):
 # Funções de Fluxo
 
 
-def iniciar_busca_cpfs(estado, gerenciador, depois=None):
-    df_temp = estado.get("df_temp")
-    gerenciador.atualizar("🔍 Coletando CPF dos pedidos...", 0, 0)
+def iniciar_busca_cpfs(
+    estado: MutableMapping[str, Any],
+    gerenciador: Optional["GerenciadorProgresso"],
+    depois: Callable[[], None] | None = None,
+) -> None:
+    df_any = estado.get("df_temp")
 
-    if df_temp is None or df_temp.empty:
+    # mypy: só usa quando não for None
+    if gerenciador is not None:
+        gerenciador.atualizar("🔍 Coletando CPF dos pedidos...", 0, 0)
+
+    if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         logger.warning("[⚠️] Não há dados de pedidos coletados.")
         return
+    df_temp: pd.DataFrame = df_any
 
     estado.setdefault("etapas_finalizadas", {})
-    if estado.get("cancelador_global") and estado["cancelador_global"].is_set():
+    cancelador = estado.get("cancelador_global")
+    if cancelador is not None and cancelador.is_set():
         logger.info("[🛑] Cancelamento detectado antes de iniciar busca de CPFs.")
-        if gerenciador:
+        if gerenciador is not None:
             gerenciador.fechar()
         return
 
@@ -6266,32 +6412,42 @@ def iniciar_busca_cpfs(estado, gerenciador, depois=None):
 
     if not pedidos_faltantes:
         logger.info("[✅] Todos os CPFs já foram coletados.")
-        if callable(depois) and not estado["cancelador_global"].is_set():
+        if callable(depois) and not (cancelador is not None and cancelador.is_set()):
             depois()
         return
 
     # ✅ Normaliza e remove duplicados UMA vez só
-    pendentes_set = {normalizar_transaction_id(pid) for pid in pedidos_faltantes}
+    pendentes_set: set[str] = {normalizar_transaction_id(pid) for pid in pedidos_faltantes}
     estado["cpf_pendentes"] = pendentes_set
     estado["cpf_total_esperado"] = len(pendentes_set)
 
     # 🔁 Inicia threads de coleta (evita duplicados)
     pool = QThreadPool.globalInstance()
 
-    def continuar_para_bairros():
-        if estado["cancelador_global"].is_set():
-            if gerenciador:
+    def continuar_para_bairros() -> None:
+        if cancelador is not None and cancelador.is_set():
+            if gerenciador is not None:
                 gerenciador.fechar()
             return
+        # iniciar_busca_bairros aceita gerenciador opcional
         iniciar_busca_bairros(estado, gerenciador, depois=depois)
 
+    # Adapter para o sinal resultado -> slot_cpf_ok sem keywords
+    def _on_cpf_ok(pedido_id: str, cpf: str) -> None:
+        estado_dict: dict[Any, Any] = cast(dict[Any, Any], estado)
+        if gerenciador is None:
+            # assinatura sem gerenciador
+            slot_cpf_ok(pedido_id, cpf, estado_dict)
+        else:
+            # assinatura com gerenciador
+            slot_cpf_ok(pedido_id, cpf, estado_dict, gerenciador)
+
     for pedido_id in pendentes_set:
-        if estado["cancelador_global"].is_set():
+        if cancelador is not None and cancelador.is_set():
             break
         runnable = ObterCpfShopifyRunnable(pedido_id, estado)
-        runnable.signals.resultado.connect(
-            partial(slot_cpf_ok, estado=estado, gerenciador=gerenciador)
-        )
+        # conecta sem passar keywords não suportadas
+        runnable.signals.resultado.connect(_on_cpf_ok)
         pool.start(runnable)
 
     # ✅ Verificador com intervalo inicial maior (use com backoff na classe)
@@ -6300,27 +6456,33 @@ def iniciar_busca_cpfs(estado, gerenciador, depois=None):
         chave="cpf",
         total_esperado=estado["cpf_total_esperado"],
         get_pendentes=lambda: estado.get("cpf_pendentes", set()),
-        callback_final=continuar_para_bairros,
-        intervalo_ms=1000,  # inicial mais calmo
-        # se sua classe aceitar, passe também:
+        callback_final=continuar_para_bairros,  # encadeia próximo passo aqui
+        intervalo_ms=1000,
         # max_intervalo_ms=8000,
         # log_cada_n_checks=20,
     )
     estado["verificador_cpf"].iniciar()
 
 
-def iniciar_busca_bairros(estado, gerenciador, depois=None):
-    df = estado.get("df_temp")
-    if df is None or df.empty:
+def iniciar_busca_bairros(
+    estado: MutableMapping[str, Any],
+    gerenciador: Optional["GerenciadorProgresso"],
+    depois: Callable[[], None] | None = None,
+) -> None:
+    df_any = estado.get("df_temp")
+    if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         logger.warning("[⚠️] Nenhuma planilha temporária encontrada.")
         return
+    df: pd.DataFrame = df_any
 
-    gerenciador.atualizar("📍 Buscando bairros dos pedidos...", 0, 0)
+    # mypy: só chama se não for None
+    if gerenciador is not None:
+        gerenciador.atualizar("📍 Buscando bairros dos pedidos...", 0, 0)
 
     estado.setdefault("etapas_finalizadas", {})
     if estado["cancelador_global"].is_set():
         logger.info("[🛑] Cancelamento detectado antes da busca de bairros.")
-        if gerenciador:
+        if gerenciador is not None:
             gerenciador.fechar()
         return
 
@@ -6334,9 +6496,7 @@ def iniciar_busca_bairros(estado, gerenciador, depois=None):
     # Só precisamos de transaction_id e CEP; remove NaN e duplicados de id
     pendentes_df = (
         df.loc[faltando, ["transaction_id", "CEP Comprador"]]
-        .dropna(
-            subset=["transaction_id"]
-        )  # mantém linhas com CEP NaN se quiser tentar outra estratégia
+        .dropna(subset=["transaction_id"])  # mantém linhas com CEP NaN se quiser outra estratégia
         .drop_duplicates(subset="transaction_id")
     )
 
@@ -6350,13 +6510,29 @@ def iniciar_busca_bairros(estado, gerenciador, depois=None):
     logger.info(f"[📍] Buscando bairro para {total} pedidos.")
 
     # Conjunto de pendentes normalizado
-    pendentes_set = {
+    pendentes_set: set[str] = {
         normalizar_transaction_id(pid) for pid in pendentes_df["transaction_id"].astype(str)
     }
     estado["bairro_total_esperado"] = len(pendentes_set)
     estado["bairro_pendentes"] = set(pendentes_set)  # cópia defensiva
 
     pool = QThreadPool.globalInstance()
+
+    # Adapter sem keywords e com casts para mypy
+    def _on_bairro_ok(pid: str, bairro: str) -> None:
+        # slot_bairro_ok espera estado: dict[Any, Any]
+        estado_dict: dict[Any, Any] = cast(dict[Any, Any], estado)
+        # Se o slot exige GerenciadorProgresso (não-opcional), só chamamos quando houver
+        if gerenciador is None:
+            # Sem gerenciador, apenas atualiza estruturas e segue (ou loga)
+            slot_bairro_ok(pid, bairro, estado_dict)  # tipo: ignore[call-arg]
+        else:
+            slot_bairro_ok(pid, bairro, estado_dict, gerenciador)  # tipo: ignore[call-arg]
+
+        # Se quiser ainda executar 'depois' quando cada item finalizar, pode guardar no estado
+        if callable(depois):
+            # opcional: deixe para o verificador final chamar apenas uma vez
+            pass
 
     # Dispara runnables
     for _, linha in pendentes_df.iterrows():
@@ -6371,30 +6547,37 @@ def iniciar_busca_bairros(estado, gerenciador, depois=None):
             pedido_id,
             cep,
             df,
-            # callback de cada item
-            lambda pid, bairro: slot_bairro_ok(
-                pedido_id=pid, bairro=bairro, estado=estado, gerenciador=gerenciador
-            ),
+            _on_bairro_ok,  # ✅ sem keywords e sem 'depois'
             estado,
         )
         pool.start(runnable)
 
-    # Verificador persistente (use intervalo maior; se sua classe tiver backoff, melhor ainda)
+    # Se o próximo passo exige GerenciadorProgresso não-opcional, garanta aqui
+    if gerenciador is None:
+        logger.warning(
+            "[i] 'gerenciador' ausente; não é possível iniciar normalização de endereços."
+        )
+        return
+
+    # Verificador persistente
     estado["verificador_bairro"] = VerificadorDeEtapa(
         estado=estado,
         chave="bairro",
         total_esperado=estado["bairro_total_esperado"],
         get_pendentes=lambda: estado.get("bairro_pendentes", set()),
-        callback_final=lambda: iniciar_normalizacao_enderecos(estado, gerenciador, depois),
-        intervalo_ms=800,  # menos agressivo que 300ms
-        # Se disponível na sua classe:
-        # max_intervalo_ms=5000,
-        # log_cada_n_checks=30,
+        callback_final=lambda: iniciar_normalizacao_enderecos(  # ✅ tipo esperado
+            estado, gerenciador  # mypy: GerenciadorProgresso garantido
+        ),
+        intervalo_ms=800,
     )
     estado["verificador_bairro"].iniciar()
 
 
-def iniciar_normalizacao_enderecos(estado, gerenciador, depois=None):
+def iniciar_normalizacao_enderecos(
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso,
+    depois: Callable[[], None] | None = None,
+) -> None:
     # gate idempotente
     if estado.get("_once_iniciar_normalizacao_enderecos"):
         logger.info("[🧪] Normalização de endereços já iniciada - ignorando repetição.")
@@ -6414,11 +6597,13 @@ def iniciar_normalizacao_enderecos(estado, gerenciador, depois=None):
     estado.setdefault("etapas_finalizadas", {})
     estado.setdefault("enderecos_normalizados", {})
 
-    df = estado.get("df_temp")
+    df_any = estado.get("df_temp")
     gerenciador.atualizar("📦 Normalizando endereços...", 0, 0)
-    if df is None or df.empty:
+    if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         logger.warning("[⚠️] Nenhuma planilha temporária encontrada.")
         return
+    df: pd.DataFrame = df_any
+
     if estado["cancelador_global"].is_set():
         if gerenciador:
             gerenciador.fechar()
@@ -6479,7 +6664,9 @@ def iniciar_normalizacao_enderecos(estado, gerenciador, depois=None):
             pedido_id,
             endereco_raw,
             complemento_raw,
-            lambda pid, dados: ao_finalizar_endereco(pid, dados, estado, gerenciador, depois),
+            lambda pid, dados: ao_finalizar_endereco(
+                str(pid), dict(dados), estado, gerenciador, depois
+            ),
             sinal_finalizacao=FinalizacaoProgressoSignal(),
             estado=estado,
         )
@@ -6496,7 +6683,13 @@ def iniciar_normalizacao_enderecos(estado, gerenciador, depois=None):
     estado["verificador_endereco"].iniciar()
 
 
-def ao_finalizar_endereco(pedido_id, endereco_dict, estado, gerenciador, depois_callback):
+def ao_finalizar_endereco(
+    pedido_id: str,
+    endereco_dict: Mapping[str, Any],
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso | None,
+    depois_callback: Callable[[], None] | None,
+) -> None:
     # Proteção contra chamadas após finalização
     if estado.get("finalizou_endereco"):
         logger.debug(
@@ -6522,11 +6715,11 @@ def ao_finalizar_endereco(pedido_id, endereco_dict, estado, gerenciador, depois_
         return
 
     # Registra o endereço normalizado e remove da lista de pendentes
-    estado["enderecos_normalizados"][pedido_id] = endereco_dict
+    estado["enderecos_normalizados"][pedido_id] = dict(endereco_dict)  # cópia defensiva
     estado["endereco_pendentes"].remove(pedido_id)
 
-    total = estado.get("endereco_total_esperado", 0)
-    atual = total - len(estado["endereco_pendentes"])
+    total: int = int(estado.get("endereco_total_esperado", 0))
+    atual: int = total - len(estado["endereco_pendentes"])
     logger.info(f"[📦] Endereços normalizados: {atual}/{total}")
 
     # Se todos foram normalizados, finaliza a etapa
@@ -6560,8 +6753,8 @@ def endereco_parece_completo(address1: str) -> bool:
     return any(char.isdigit() for char in partes[1])
 
 
-def executar_fluxo_loja(estado):
-    gerenciador = GerenciadorProgresso(
+def executar_fluxo_loja(estado: MutableMapping[str, Any]) -> None:
+    gerenciador: GerenciadorProgresso = GerenciadorProgresso(
         titulo="🔎 Buscando pedidos na Shopify",
         com_percentual=False,
         estado_global=estado,
@@ -6570,12 +6763,12 @@ def executar_fluxo_loja(estado):
     estado["gerenciador_progresso"] = gerenciador
     gerenciador.atualizar("🔄 Buscando pedidos pagos na Shopify...", 0, 0)
 
-    data_inicio = estado["entrada_data_inicio"].date().toString("dd/MM/yyyy")
-    fulfillment_status = estado["combo_status"].currentText()
-    produto_alvo = (
+    data_inicio: str = estado["entrada_data_inicio"].date().toString("dd/MM/yyyy")
+    fulfillment_status: str = estado["combo_status"].currentText()
+    produto_alvo: str | None = (
         estado["combo_produto"].currentText() if estado["check_produto"].isChecked() else None
     )
-    skus_info = estado["skus_info"]
+    skus_info: Mapping[str, Any] = estado["skus_info"]
 
     iniciar_todas_as_buscas(
         estado=estado,
@@ -6589,16 +6782,17 @@ def executar_fluxo_loja(estado):
 
 
 def iniciar_todas_as_buscas(
-    estado,
-    gerenciador,
-    data_inicio_str,
-    produto_alvo=None,
-    skus_info=None,
-    fulfillment_status="any",
-    depois=None,
-):
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso,
+    data_inicio_str: str,
+    produto_alvo: str | None = None,
+    skus_info: Mapping[str, Any] | None = None,
+    fulfillment_status: str = "any",
+    depois: Callable[[], None] | None = None,
+) -> None:
     print("[🧪] iniciar_todas_as_buscas recebeu depois =", depois)
     logger.info(f"[🧪] Threads ativas no pool: {QThreadPool.globalInstance().activeThreadCount()}")
+
     # Salva o gerenciador original apenas se ainda não existir
     if "gerenciador_progresso" not in estado or not estado["gerenciador_progresso"]:
         estado["gerenciador_progresso"] = gerenciador
@@ -6625,19 +6819,21 @@ def iniciar_todas_as_buscas(
 
     # Mostra a janela
     QTimer.singleShot(100, gerenciador.janela.show)
+
     print("[🧪 estado id antes do runnable]:", id(estado))
     runnable = BuscarPedidosPagosRunnable(data_inicio_str, estado, fulfillment_status)
+
     runnable.sinais.resultado.connect(
         lambda pedidos: tratar_resultado(
-            pedidos, produto_alvo, skus_info, estado, gerenciador, depois
+            pedidos, produto_alvo, skus_info or {}, estado, gerenciador, depois
         )
     )
-    runnable.sinais.erro.connect(lambda msg: tratar_erro(msg, estado, gerenciador))
+    runnable.sinais.erro.connect(lambda _msg: tratar_erro(gerenciador))
 
     QThreadPool.globalInstance().start(runnable)
 
 
-def registrar_log_endereco(pedido_id, dados):
+def registrar_log_endereco(pedido_id: str, dados: Mapping[str, Any]) -> None:
     try:
         log_path = os.path.abspath("log_enderecos.txt")
         with open(log_path, "a", encoding="utf-8") as f:
@@ -6656,13 +6852,15 @@ def registrar_log_endereco(pedido_id, dados):
 
 
 class GPTRateLimiter:
-    def __init__(self, max_concorrentes=4, intervalo_minimo=0.3):
-        self._semaforo = threading.BoundedSemaphore(value=max_concorrentes)
-        self._lock = threading.Lock()
-        self._ultima_chamada = 0
-        self._intervalo_minimo = intervalo_minimo  # em segundos
+    def __init__(self, max_concorrentes: int = 4, intervalo_minimo: float = 0.3) -> None:
+        self._semaforo: threading.BoundedSemaphore = threading.BoundedSemaphore(
+            value=max_concorrentes
+        )
+        self._lock: threading.Lock = threading.Lock()
+        self._ultima_chamada: float = 0.0
+        self._intervalo_minimo: float = intervalo_minimo  # em segundos
 
-    def chamar(self, prompt, client, model="gpt-4o"):
+    def chamar(self, prompt: str, client: Any, model: str = "gpt-4o") -> dict[str, Any]:
         with self._semaforo:
             with self._lock:
                 agora = time.time()
@@ -6679,11 +6877,11 @@ class GPTRateLimiter:
                         temperature=0,
                         timeout=10,
                     )
-                    conteudo = response.choices[0].message.content.strip()
-                    json_inicio = conteudo.find("{")
-                    json_fim = conteudo.rfind("}") + 1
+                    conteudo: str = response.choices[0].message.content.strip()
+                    json_inicio: int = conteudo.find("{")
+                    json_fim: int = conteudo.rfind("}") + 1
                     if json_inicio >= 0 and json_fim > json_inicio:
-                        return json.loads(conteudo[json_inicio:json_fim])
+                        return cast(dict[str, Any], json.loads(conteudo[json_inicio:json_fim]))
                     else:
                         raise ValueError("❌ JSON não encontrado na resposta da API.")
                 except RateLimitError:
@@ -6701,7 +6899,19 @@ class GPTRateLimiter:
 gpt_limiter = GPTRateLimiter(max_concorrentes=3, intervalo_minimo=0.6)
 
 
-def usar_gpt_callback(address1, address2, logradouro_cep, bairro_cep):
+class EnderecoLLM(TypedDict):
+    base: str
+    numero: str
+    complemento: str
+    precisa_contato: bool
+
+
+def usar_gpt_callback(
+    address1: str,
+    address2: str,
+    logradouro_cep: str,
+    bairro_cep: str,
+) -> EnderecoLLM:
     prompt = f"""
 Responda com um JSON contendo:
 
@@ -6756,10 +6966,33 @@ Formato de resposta:
 {{"base": "...", "numero": "...", "complemento": "...", "precisa_contato": false}}
 """.strip()
 
-    return gpt_limiter.chamar(prompt, client)
+    # gpt_limiter/client vêm do escopo do módulo; se preferir, passe-os como parâmetros e tipe também
+    resp = gpt_limiter.chamar(prompt, client)
+
+    # Se já veio dict, só valida/coage tipos
+    if isinstance(resp, dict):
+        data = resp
+    else:
+        # assume string JSON
+        try:
+            data = json.loads(cast(str, resp))
+        except Exception:
+            # fallback seguro
+            return EnderecoLLM(base="", numero="s/n", complemento="", precisa_contato=True)
+
+    out: EnderecoLLM = EnderecoLLM(
+        base=str(data.get("base", "") or ""),
+        numero=str(data.get("numero", "") or ""),
+        complemento=str(data.get("complemento", "") or ""),
+        precisa_contato=bool(data.get("precisa_contato", False)),
+    )
+    return out
 
 
-def finalizar_endereco_normalizado(estado, gerenciador=None):
+def finalizar_endereco_normalizado(
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso | None = None,
+) -> None:
     gerenciador = gerenciador or estado.get("gerenciador_progresso")
     logger.info(f"[🔚] Finalizando processo de normalização... gerenciador={id(gerenciador)}")
 
@@ -6778,11 +7011,12 @@ def finalizar_endereco_normalizado(estado, gerenciador=None):
             logger.warning("[⚠️] Nenhum gerenciador fornecido para fechar.")
     except Exception as e:
         logger.exception(f"[❌] Erro ao tentar fechar gerenciador: {e}")
+
     aguardar_e_resetar_pool()
     resetar_etapas_estado(estado)
 
 
-def aguardar_e_resetar_pool():
+def aguardar_e_resetar_pool() -> None:
     pool = QThreadPool.globalInstance()
     pool.waitForDone(5000)  # Espera até 5s
 
@@ -6798,7 +7032,7 @@ def aguardar_e_resetar_pool():
     logger.info("[✅] QThreadPool limpo com sucesso.")
 
 
-def resetar_etapas_estado(estado):
+def resetar_etapas_estado(estado: MutableMapping[str, Any]) -> None:
     logger.info("[🧼] Limpando verificadores e pendentes do estado...")
 
     estado.setdefault("etapas_finalizadas", {})  # ✅ garante existência do dicionário
@@ -6819,8 +7053,11 @@ def resetar_etapas_estado(estado):
     logger.info("[✅] Estado limpo com sucesso.")
 
 
-def atualizar_planilha_shopify(estado, gerenciador):
-    def encerrar_se_cancelado(mensagem):
+def atualizar_planilha_shopify(
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso | None,
+) -> None:
+    def encerrar_se_cancelado(mensagem: str) -> bool:
         if estado.get("cancelador_global", threading.Event()).is_set():
             logger.warning(f"[🛑] {mensagem}")
             if gerenciador:
@@ -6834,15 +7071,17 @@ def atualizar_planilha_shopify(estado, gerenciador):
     # garante skus_info disponível para eh_indisponivel
     estado.setdefault("skus_info", {})
 
-    etapas = estado.get("etapas_finalizadas", {})
+    etapas: Mapping[str, Any] = estado.get("etapas_finalizadas", {})
     if not (etapas.get("cpf") and etapas.get("bairro") and etapas.get("endereco")):
         logger.warning(f"[⚠️] Dados incompletos! Etapas: {etapas}")
         return
 
-    df = estado.get("df_temp")
-    if df is None or df.empty:
+    df_any = estado.get("df_temp")
+    df: pd.DataFrame
+    if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         logger.warning("[⚠️] DataFrame temporário não encontrado.")
         return
+    df = df_any
 
     logger.info("[✅] Todos os dados foram coletados. Atualizando a planilha...")
 
@@ -6873,7 +7112,7 @@ def atualizar_planilha_shopify(estado, gerenciador):
         df.loc[idx, "Endereço Entrega"] = endereco.get("endereco_base", "")
         df.loc[idx, "Número Entrega"] = endereco.get("numero", "")
         df.loc[idx, "Complemento Entrega"] = endereco.get("complemento", "")
-        df.loc[idx, "Bairro Entrega"] = estado["dados_temp"]["bairros"].get(pid, "")
+        df.loc[idx, "Bairro Entrega"] = estado.get("dados_temp", {}).get("bairros", {}).get(pid, "")
 
     # telefones normalizados
     for col in ["Telefone Comprador", "Celular Comprador"]:
@@ -6903,14 +7142,14 @@ def atualizar_planilha_shopify(estado, gerenciador):
     logger.info(f"[✅] Planilha atualizada com {len(df)} linhas.")
 
 
-def exibir_alerta_revisao(enderecos_normalizados):
+def exibir_alerta_revisao(enderecos_normalizados: Mapping[str, Mapping[str, Any]]) -> None:
     """
     Mostra um alerta simples com a quantidade de endereços que exigem contato.
     """
     total = sum(
         1
         for dados in enderecos_normalizados.values()
-        if dados.get("precisa_contato", "").strip().upper() == "SIM"
+        if (dados.get("precisa_contato", "") or "").strip().upper() == "SIM"
     )
 
     if total > 0:
@@ -6921,52 +7160,61 @@ def exibir_alerta_revisao(enderecos_normalizados):
         )
 
 
-def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depois):
+def tratar_resultado(
+    pedidos: Iterable[Mapping[str, Any]],
+    produto_alvo: str | None,
+    skus_info: Mapping[str, Mapping[str, Any]],
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso,
+    depois: Callable[[], None] | None,
+) -> None:
     print("[🧪] tratar_resultado recebeu depois =", depois)
     estado["df_temp"] = pd.DataFrame()
-    df_temp = estado.get("df_temp", pd.DataFrame())
+    df_temp: pd.DataFrame = estado.get("df_temp", pd.DataFrame())
 
     # modo de coleta: "any" (tudo) ou "unfulfilled" (somente pendentes)
-    modo_fs = (estado.get("fulfillment_status_selecionado") or "any").strip().lower()
+    modo_fs: str = (estado.get("fulfillment_status_selecionado") or "any").strip().lower()
 
     # Filtro por produto específico (se marcado)
-    ids_filtrados = set()
+    ids_filtrados: set[str] = set()
     if produto_alvo and skus_info:
-        produto_alvo = produto_alvo.strip().lower()
+        alvo = produto_alvo.strip().lower()
         for nome_produto, dados in skus_info.items():
-            if produto_alvo in nome_produto.lower():
+            if alvo in nome_produto.lower():
                 ids_filtrados.update(map(str, dados.get("shopify_ids", [])))
 
-    linhas_geradas = []
+    linhas_geradas: list[dict[str, Any]] = []
     for pedido in pedidos:
         # --- dados básicos do pedido (robustos a None) ---
-        cust = pedido.get("customer") or {}
+        cust: Mapping[str, Any] = pedido.get("customer") or {}
         first = (cust.get("firstName") or "").strip()
         last = (cust.get("lastName") or "").strip()
         nome_cliente = f"{first} {last}".strip()
-        email = cust.get("email") or ""
-        endereco = pedido.get("shippingAddress") or {}  # pode vir None
-        telefone = endereco.get("phone", "") or ""
-        transaction_id = str(pedido.get("id") or "").split("/")[-1]
+        email: str = cust.get("email") or ""
+        endereco: Mapping[str, Any] = pedido.get("shippingAddress") or {}  # pode vir None
+        telefone: str = endereco.get("phone", "") or ""
+        transaction_id: str = str(pedido.get("id") or "").split("/")[-1]
 
         # --- frete / status / desconto ---
-        valor_frete = (
+        valor_frete_any = (
             ((pedido.get("shippingLine") or {}).get("discountedPriceSet") or {}).get(
                 "shopMoney", {}
             )
         ).get("amount")
         try:
-            valor_frete = float(valor_frete) if valor_frete is not None else 0.0
+            valor_frete: float = float(valor_frete_any) if valor_frete_any is not None else 0.0
         except Exception:
             valor_frete = 0.0
 
-        status_fulfillment = (pedido.get("displayFulfillmentStatus") or "").strip().upper()
+        status_fulfillment: str = (pedido.get("displayFulfillmentStatus") or "").strip().upper()
 
-        valor_desconto = (
+        valor_desconto_any = (
             (pedido.get("currentTotalDiscountsSet") or {}).get("shopMoney") or {}
         ).get("amount")
         try:
-            valor_desconto = float(valor_desconto) if valor_desconto is not None else 0.0
+            valor_desconto: float = (
+                float(valor_desconto_any) if valor_desconto_any is not None else 0.0
+            )
         except Exception:
             valor_desconto = 0.0
 
@@ -6983,7 +7231,7 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
         )
 
         # --- mapa remainingQuantity por lineItem.id (a partir de fulfillmentOrders) ---
-        remaining_por_line = {}
+        remaining_por_line: dict[str, int] = {}
         try:
             fo_edges = (pedido.get("fulfillmentOrders") or {}).get("edges") or []
             for fo_e in fo_edges:
@@ -6995,24 +7243,23 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
                     lid = str(gid).split("/")[-1] if gid else ""
                     rq = int(li_node.get("remainingQuantity") or 0)
                     if lid:
-                        # se aparecer repetido em múltiplos FOs (raro), guarde o maior
                         remaining_por_line[lid] = max(remaining_por_line.get(lid, 0), rq)
         except Exception:
             remaining_por_line = {}
 
-        # também guardamos o total restante do pedido (útil para “último lote” depois)
         total_remaining_pedido = sum(remaining_por_line.values())
         estado.setdefault("dados_temp", {}).setdefault("remaining_totais", {})[transaction_id] = (
             int(total_remaining_pedido)
         )
 
-        # --- CEP por pedido (já fazia) ---
+        # --- CEP por pedido ---
         estado.setdefault("cep_por_pedido", {})[transaction_id] = (
             (endereco.get("zip", "") or "").replace("-", "").strip()
         )
 
         # --- processar line items ---
-        for item_edge in (pedido.get("lineItems") or {}).get("edges", []):
+        line_edges = (pedido.get("lineItems") or {}).get("edges", [])
+        for item_edge in line_edges:
             item = item_edge.get("node") or {}
             product_id_raw = (item.get("product") or {}).get("id", "")
             if not product_id_raw:
@@ -7028,15 +7275,15 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
             for nome_local, dados in skus_info.items():
                 if product_id in map(str, dados.get("shopify_ids", [])):
                     nome_produto = nome_local
-                    sku_item = dados.get("sku", "")
+                    sku_item = str(dados.get("sku", ""))
                     break
 
             base_qtd = int(item.get("quantity") or 0)
             valor_total_linha = float(
                 ((item.get("discountedTotalSet") or {}).get("shopMoney") or {}).get("amount") or 0
             )
-            valor_unitario = round(valor_total_linha / base_qtd, 2) if base_qtd else 0.0
-            id_line_item = str(item.get("id", "")).split("/")[-1]
+            valor_unitario: float = round(valor_total_linha / base_qtd, 2) if base_qtd else 0.0
+            id_line_item: str = str(item.get("id", "")).split("/")[-1]
 
             # Quantidade a gerar conforme o modo selecionado
             if modo_fs == "unfulfilled":
@@ -7045,14 +7292,13 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
                     continue
                 qtd_a_gerar = remaining
             else:
-                # "any" → gera todas as unidades (mesmo já processadas)
                 qtd_a_gerar = base_qtd if base_qtd > 0 else 0
 
             # Flag de disponibilidade (usa regra local)
             indisponivel_flag = "S" if eh_indisponivel(nome_produto) else "N"
 
             for _ in range(qtd_a_gerar):
-                linha = {
+                linha: dict[str, Any] = {
                     "Número pedido": pedido.get("name", ""),
                     "Nome Comprador": nome_cliente,
                     "Data Pedido": (pedido.get("createdAt") or "")[:10],
@@ -7075,7 +7321,6 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
                     "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
                     "Valor Total": f"{valor_unitario:.2f}".replace(".", ","),
                     "Total Pedido": "",
-                    # estes campos serão sobrescritos/ajustados em aplicar_lotes
                     "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
                     "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
                     "Outras despesas": "",
@@ -7191,9 +7436,9 @@ def slot_bairro_ok(
         logger.debug(f"[🟡] Pedido {pedido_id} já processado ou inexistente em pendentes.")
 
 
-def tratar_erro(gerenciador):
-    thread_ui = QCoreApplication.instance().thread()
-    if QThread.currentThread() == thread_ui:
+def tratar_erro(gerenciador: GerenciadorProgresso) -> None:
+    app: QCoreApplication | None = QCoreApplication.instance()
+    if app is not None and QThread.currentThread() == app.thread():
         gerenciador.fechar()
     else:
         QTimer.singleShot(0, gerenciador.fechar)
@@ -7202,9 +7447,13 @@ def tratar_erro(gerenciador):
 # Funções de mapeamento dos produtos da Loja
 
 
-def abrir_dialogo_mapeamento_shopify(skus_info, produtos_shopify, skus_path):
+def abrir_dialogo_mapeamento_shopify(
+    skus_info: MutableMapping[str, Any],
+    produtos_shopify: Sequence[Mapping[str, Any]],
+    skus_path: str,
+) -> None:
     class DialogoMapeamento(QDialog):
-        def __init__(self):
+        def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("Mapear SKUs com Produtos da Shopify")
             self.setMinimumSize(900, 560)
@@ -7247,10 +7496,11 @@ def abrir_dialogo_mapeamento_shopify(skus_info, produtos_shopify, skus_path):
             self.btn_concluir.clicked.connect(self.accept)
 
             # atalhos
-            QShortcut(QKeySequence("Ctrl+S"), self, activated=self._salvar)
+            self._sc_save = QShortcut(QKeySequence("Ctrl+S"), self)
+            self._sc_save.activated.connect(self._salvar)
 
             # dados de entrada
-            self.skus_info = skus_info
+            self.skus_info: MutableMapping[str, Any] = skus_info
             self.entries = self._flatten_shopify(produtos_shopify or [])
 
             # primeira carga
@@ -7267,18 +7517,26 @@ def abrir_dialogo_mapeamento_shopify(skus_info, produtos_shopify, skus_path):
                 return str(self.skus_info[interno].get("sku", "") or "")
             return ""
 
-        def _flatten_shopify(self, produtos) -> list[dict]:
+        def _flatten_shopify(
+            self,
+            produtos: Sequence[Mapping[str, Any]],
+        ) -> list[dict[str, Any]]:
             """
             Normaliza produtos/variantes da Shopify em itens planos com:
-              {'display', 'sku', 'id', 'product_id', 'variant_id'}
-            Prefere variant_id como 'id'; se não houver variants, usa product_id.
+            {'display', 'sku', 'id', 'product_id', 'variant_id'}
             """
-            out: list[dict] = []
+            out: list[dict[str, Any]] = []
             for p in produtos:
-                titulo = (p.get("title") or p.get("name") or "").strip()
+                titulo = str(p.get("title") or p.get("name") or "").strip()
                 pid = p.get("id") or p.get("product_id")
-                variants = p.get("variants") or []
-                if isinstance(variants, list) and variants:
+                variants_any = p.get("variants") or []
+                variants: Sequence[Mapping[str, Any]] = (
+                    cast(Sequence[Mapping[str, Any]], variants_any)
+                    if isinstance(variants_any, list)
+                    else []
+                )
+
+                if variants:
                     for v in variants:
                         vid = v.get("id")
                         vsku = str(v.get("sku") or "").strip()
@@ -7304,6 +7562,7 @@ def abrir_dialogo_mapeamento_shopify(skus_info, produtos_shopify, skus_path):
                             "variant_id": None,
                         }
                     )
+
             return [e for e in out if e.get("id") is not None]
 
         # ---------- UI ----------
@@ -7383,53 +7642,88 @@ def abrir_dialogo_mapeamento_shopify(skus_info, produtos_shopify, skus_path):
     dlg.exec_()
 
 
-def mapear_skus_com_produtos_shopify(skus_info):
-    produtos = buscar_todos_produtos_shopify()
+class ShopifyVariant(TypedDict):
+    product_id: int
+    variant_id: int
+    title: str
+    sku: str
+
+
+def mapear_skus_com_produtos_shopify(skus_info: Mapping[str, Any]) -> None:
+    produtos: list[ShopifyVariant] = buscar_todos_produtos_shopify()
     if not produtos:
         QMessageBox.warning(None, "Erro", "Nenhum produto retornado da Shopify.")
         return
-    abrir_dialogo_mapeamento_shopify(skus_info, produtos, skus_path)
+
+    # Se o diálogo precisa mutar, faça cast localmente:
+    abrir_dialogo_mapeamento_shopify(
+        cast(MutableMapping[str, Any], skus_info),  # só se realmente for mutado lá dentro
+        produtos,
+        skus_path,
+    )
 
 
-def buscar_todos_produtos_shopify():
-    api_version = obter_api_shopify_version()
-    url = f"https://{settings.SHOP_URL}/admin/api/{api_version}/products.json?limit=250"
-    headers = {"X-Shopify-Access-Token": settings.SHOPIFY_TOKEN, "Content-Type": "application/json"}
+def buscar_todos_produtos_shopify() -> list[ShopifyVariant]:
+    api_version: str = obter_api_shopify_version()
+    url: str | None = f"https://{settings.SHOP_URL}/admin/api/{api_version}/products.json?limit=250"
+    headers: dict[str, str] = {
+        "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
+        "Content-Type": "application/json",
+    }
 
-    todos = []
-    pagina_atual = 1
+    todos: list[ShopifyVariant] = []
+    pagina_atual: int = 1
 
     while url:
-        resp = http_get(url, headers=headers, verify=False)
+        resp = http_get(url, headers=headers, verify=False)  # tipo do resp vem do requests
         if resp.status_code != 200:
             print(f"❌ Erro Shopify {resp.status_code}: {resp.text}")
             break
 
-        produtos = resp.json().get("products", [])
-        print(f"📄 Página {pagina_atual}: {len(produtos)} produtos retornados")
+        produtos_json: list[dict[str, Any]] = resp.json().get("products", [])
+        print(f"📄 Página {pagina_atual}: {len(produtos_json)} produtos retornados")
 
-        for produto in produtos:
-            id_produto = produto.get("id")
-            titulo_produto = produto.get("title", "").strip()
-            variants = produto.get("variants", [])
+        for produto in produtos_json:
+            id_produto_any: Any = produto.get("id")
+            if id_produto_any is None:
+                continue
+            try:
+                id_produto: int = int(id_produto_any)
+            except (TypeError, ValueError):
+                continue
+
+            titulo_produto: str = str(produto.get("title", "")).strip()
+            variants: list[dict[str, Any]] = produto.get("variants", []) or []
 
             for variante in variants:
+                variant_id_any: Any = variante.get("id")
+                if variant_id_any is None:
+                    continue
+                try:
+                    variant_id: int = int(variant_id_any)
+                except (TypeError, ValueError):
+                    continue
+
+                sku: str = str(variante.get("sku", "")).strip()
+
                 todos.append(
-                    {
-                        "product_id": id_produto,
-                        "variant_id": variante.get("id"),
-                        "title": titulo_produto,
-                        "sku": variante.get("sku", "").strip(),
-                    }
+                    ShopifyVariant(
+                        product_id=id_produto,
+                        variant_id=variant_id,
+                        title=titulo_produto,
+                        sku=sku,
+                    )
                 )
 
         pagina_atual += 1
 
-        link = resp.headers.get("Link", "")
+        link: str = resp.headers.get("Link", "") or ""
         if 'rel="next"' in link:
             partes = link.split(",")
-            next_url = [p.split(";")[0].strip().strip("<>") for p in partes if 'rel="next"' in p]
-            url = next_url[0] if next_url else None
+            next_url_parts = [
+                p.split(";")[0].strip().strip("<>") for p in partes if 'rel="next"' in p
+            ]
+            url = next_url_parts[0] if next_url_parts else None
         else:
             break
 
@@ -7439,30 +7733,35 @@ def buscar_todos_produtos_shopify():
 # Função para marcar itens como processados
 
 
-def marcar_itens_como_fulfilled_na_shopify(df):
+def marcar_itens_como_fulfilled_na_shopify(df: pd.DataFrame | None) -> None:
     if df is None or df.empty:
         print("⚠️ Nenhuma planilha carregada.")
         return
 
-    total_fulfilled = {"count": 0}
-    erros = []
+    total_fulfilled: dict[str, int] = {"count": 0}
+    erros: list[tuple[str, str]] = []
 
-    pool = QThreadPool.globalInstance()
+    pool: QThreadPool = QThreadPool.globalInstance()
 
-    for order_id, grupo in df.groupby("transaction_id"):
-        planilha_line_ids = {
-            f"gid://shopify/LineItem/{int(rec.get('id_line_item'))}"
-            for rec in grupo.to_dict("records")
+    # groupby retorna (chave, DataFrame)
+    for order_id_any, grupo in df.groupby("transaction_id"):
+        order_id: str = str(order_id_any)
+
+        records: list[dict[Hashable, Any]] = grupo.to_dict("records")
+
+        planilha_line_ids: set[str] = {
+            f"gid://shopify/LineItem/{int(rec['id_line_item'])}"
+            for rec in records
             if rec.get("id_line_item")
         }
 
         runnable = FulfillPedidoRunnable(order_id, planilha_line_ids)
 
-        def sucesso(oid, qtd):
+        def sucesso(oid: str, qtd: int) -> None:
             total_fulfilled["count"] += qtd
             print(f"✅ Pedido {oid} → {qtd} item(ns) enviados.")
 
-        def falha(oid, msg):
+        def falha(oid: str, msg: str) -> None:
             erros.append((oid, msg))
             print(f"❌ Erro no pedido {oid}: {msg}")
 
@@ -8640,7 +8939,7 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
 
     def salvar_tabelas() -> None:
         skus: dict[str, Any] = {}
-
+        # --- PRODUTOS ---
         for row in range(tabela_prod.rowCount()):
 
             def get(col: int, _row: int = row) -> str:
@@ -8648,17 +8947,19 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 return item.text().strip() if item else ""
 
             nome, sku, peso_str, guru, shopify, preco_str = map(get, range(6))
-
             if not nome:
                 continue
+
             try:
                 peso: float = float(peso_str)
             except (ValueError, TypeError):
                 peso = 0.0
+
             try:
-                preco: float | None = float(preco_str) if preco_str else None
+                preco_p: float | None = float(preco_str) if preco_str else None
             except (ValueError, TypeError):
-                preco = None
+                preco_p = None
+
             skus[nome] = {
                 "sku": sku,
                 "peso": peso,
@@ -8666,11 +8967,12 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
                 "tipo": "produto",
                 "composto_de": [],
-                "indisponivel": _get_checkbox(tabela_prod, row, 6),  # << AQUI
+                "indisponivel": _get_checkbox(tabela_prod, row, 6),
             }
-            if preco is not None:
-                skus[nome]["preco_fallback"] = preco
+            if preco_p is not None:
+                skus[nome]["preco_fallback"] = preco_p
 
+        # --- ASSINATURAS ---
         for row in range(tabela_assin.rowCount()):
 
             def get(col: int, _row: int = row) -> str:
@@ -8678,11 +8980,10 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 return item.text().strip() if item else ""
 
             nome_base, recorrencia, periodicidade, guru, preco_str = map(get, range(5))
-
             if not nome_base:
                 continue
 
-            key: str = chave_assinatura(nome_base, periodicidade)  # como você já faz
+            key: str = chave_assinatura(nome_base, periodicidade)
 
             try:
                 preco_a: float | None = float(preco_str) if preco_str else None
@@ -8700,33 +9001,36 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 "composto_de": [],
                 "sku": "",
                 "peso": 0.0,
-                "indisponivel": _get_checkbox(tabela_assin, row, 5),  # << AQUI
+                "indisponivel": _get_checkbox(tabela_assin, row, 5),
             }
             if preco_a is not None:
                 skus[key]["preco_fallback"] = preco_a
 
+        # --- COMBOS ---
         for row in range(tabela_combo.rowCount()):
 
             def get(col: int, _row: int = row) -> str:
                 item = tabela_combo.item(_row, col)
                 return item.text().strip() if item else ""
 
-            nome, sku, composto, guru, shopify = map(get, range(5))
-            preco: float | None = float(preco_str) if preco_str else None
+            # Agora lendo 6 colunas para capturar preco_str também
+            nome, sku, composto, guru, shopify, preco_str = map(get, range(6))
             if not nome:
                 continue
+
             try:
                 preco_c: float | None = float(preco_str) if preco_str else None
             except (ValueError, TypeError):
                 preco_c = None
+
             skus[nome] = {
                 "sku": sku,
                 "peso": 0.0,
-                "tipo": "produto",  # você usa "produto" pra combos, mantive
+                "tipo": "produto",  # combos seguem seu padrão
                 "composto_de": [x.strip() for x in composto.split(",") if x.strip()],
                 "guru_ids": [x.strip() for x in guru.split(",") if x.strip()],
                 "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
-                "indisponivel": _get_checkbox(tabela_combo, row, 6),  # << AQUI
+                "indisponivel": _get_checkbox(tabela_combo, row, 6),
             }
             if preco_c is not None:
                 skus[nome]["preco_fallback"] = preco_c
