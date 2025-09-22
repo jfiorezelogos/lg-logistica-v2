@@ -347,7 +347,14 @@
       "cupom": {
         "nome": "VOLCAN"
       },
-      "assinaturas": []
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral) — bimestral - bimestral",
+        "Assinatura 2 anos (mensal) — mensal - mensal",
+        "Assinatura 3 anos (bimestral) — bimestral - bimestral",
+        "Assinatura 3 anos (mensal) — mensal - mensal",
+        "Assinatura Anual (bimestral) — bimestral - bimestral",
+        "Assinatura Anual (mensal) — mensal - mensal"
+      ]
     },
     {
       "id": "5e2c7aab-369f-42b2-ba7a-ff1e798a588f",
@@ -1112,10 +1119,12 @@
         "nome": "GREGOS"
       },
       "assinaturas": [
-        "Assinatura 3 anos (bimestral) — bimestral",
-        "Assinatura 3 anos (mensal) — mensal",
-        "Assinatura Anual (bimestral) — bimestral",
-        "Assinatura Anual (mensal) — mensal"
+        "Assinatura 2 anos (bimestral) — bimestral - bimestral",
+        "Assinatura 2 anos (mensal) — mensal - mensal",
+        "Assinatura 3 anos (bimestral) — bimestral - bimestral",
+        "Assinatura 3 anos (mensal) — mensal - mensal",
+        "Assinatura Anual (bimestral) — bimestral - bimestral",
+        "Assinatura Anual (mensal) — mensal - mensal"
       ]
     },
     {

@@ -33,7 +33,7 @@
         ],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": true,
+        "indisponivel": false,
         "preco_fallback": 80.0
     },
     "Isagoge": {
@@ -50,7 +50,7 @@
         ],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": true,
+        "indisponivel": false,
         "preco_fallback": 80.0
     },
     "Virgílio": {
@@ -120,7 +120,11 @@
         "guru_ids": [
             "9fc81e7e-bafe-4c7f-8831-7a9be70ebfbd"
         ],
-        "shopify_ids": [],
+        "shopify_ids": [
+            8569490211006,
+            8569500926142,
+            8569636126910
+        ],
         "tipo": "produto",
         "composto_de": [],
         "indisponivel": false,
@@ -159,7 +163,8 @@
         "sku": "L006A",
         "peso": 0.65,
         "guru_ids": [
-            "9f8c4a77-0a0e-42a0-9ae4-84ae51445333"
+            "9f8c4a77-0a0e-42a0-9ae4-84ae51445333",
+            "9fdc58ff-84c8-4c5a-8949-9471204680d0"
         ],
         "shopify_ids": [],
         "tipo": "produto",
@@ -189,7 +194,22 @@
         "composto_de": [],
         "indisponivel": false
     },
-    "Assinatura Anual (mensal) — mensal": {
+    "Categorias - Aristóteles": {
+        "sku": "L008A",
+        "peso": 0.65,
+        "guru_ids": [
+            "9fd6513e-ae31-440c-a913-3d02c0b51375"
+        ],
+        "shopify_ids": [
+            8581899714750,
+            8581966594238,
+            8581972689086
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": true
+    },
+    "Assinatura Anual (mensal) — mensal - mensal": {
         "tipo": "assinatura",
         "recorrencia": "anual",
         "periodicidade": "mensal",
@@ -203,7 +223,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Anual (bimestral) — bimestral": {
+    "Assinatura Anual (bimestral) — bimestral - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "anual",
         "periodicidade": "bimestral",
@@ -217,7 +237,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 2 anos (bimestral) — bimestral": {
+    "Assinatura 2 anos (bimestral) — bimestral - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "bianual",
         "periodicidade": "bimestral",
@@ -231,7 +251,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 2 anos (mensal) — mensal": {
+    "Assinatura 2 anos (mensal) — mensal - mensal": {
         "tipo": "assinatura",
         "recorrencia": "bianual",
         "periodicidade": "mensal",
@@ -245,7 +265,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 3 anos (bimestral) — bimestral": {
+    "Assinatura 3 anos (bimestral) — bimestral - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "trianual",
         "periodicidade": "bimestral",
@@ -259,7 +279,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 3 anos (mensal) — mensal": {
+    "Assinatura 3 anos (mensal) — mensal - mensal": {
         "tipo": "assinatura",
         "recorrencia": "trianual",
         "periodicidade": "mensal",
@@ -273,7 +293,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Bimestral (bimestral) — bimestral": {
+    "Assinatura Bimestral (bimestral) — bimestral - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "bimestral",
         "periodicidade": "bimestral",
@@ -287,7 +307,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Mensal (mensal) — mensal": {
+    "Assinatura Mensal (mensal) — mensal - mensal": {
         "tipo": "assinatura",
         "recorrencia": "mensal",
         "periodicidade": "mensal",
@@ -316,8 +336,7 @@
             "9ef8fd8b-b1a0-4292-a9fe-ab7e6ade86e0"
         ],
         "shopify_ids": [],
-        "indisponivel": false,
-        "preco_fallback": 440.0
+        "indisponivel": false
     },
     "Combo Boas-vindas": {
         "sku": "",
@@ -329,9 +348,27 @@
             "L004A",
             "B005A"
         ],
-        "guru_ids": [],
+        "guru_ids": [
+            "9fcc78ad-dbea-466a-80a1-eeba2205e4aa"
+        ],
         "shopify_ids": [],
-        "indisponivel": false,
-        "preco_fallback": 370.0
+        "indisponivel": false
+    },
+    "Aristóteles - Obras Completas": {
+        "sku": "",
+        "peso": 0.0,
+        "tipo": "produto",
+        "composto_de": [
+            "L008A"
+        ],
+        "guru_ids": [
+            "9fd647f8-9471-41e6-8a57-918973e84a17"
+        ],
+        "shopify_ids": [
+            8582036488382,
+            8582088655038,
+            8582093701310
+        ],
+        "indisponivel": false
     }
 }

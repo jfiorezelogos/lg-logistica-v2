@@ -451,12 +451,17 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
             self.setMinimumSize(800, 500)
             self.layout = QVBoxLayout(self)
 
-            # Campo para digitar nome interno
+            # mantém referências
+            self.skus_info = skus_info
+            self.produtos = produtos_guru or []
+            self.produtos_restantes = list(self.produtos)
+
+            # Seletor de produto interno (não permite digitar)
             linha_nome = QHBoxLayout()
-            linha_nome.addWidget(QLabel("Nome interno:"))
-            self.input_nome = QLineEdit()
-            self.input_nome.textChanged.connect(self.iniciar)
-            linha_nome.addWidget(self.input_nome)
+            linha_nome.addWidget(QLabel("Selecionar produto interno:"))
+            self.combo_nome_interno = QComboBox()
+            self.combo_nome_interno.setEditable(False)
+            linha_nome.addWidget(self.combo_nome_interno)
             self.layout.addLayout(linha_nome)
 
             # Lista de produtos do Guru
@@ -482,22 +487,21 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
             self.widget_assinatura = QWidget()
             linha_assin = QHBoxLayout(self.widget_assinatura)
             self.combo_duracao = QComboBox()
-            # duração do plano (tempo contratado)
             self.combo_duracao.addItems(["mensal", "bimestral", "anual", "bianual", "trianual"])
             linha_assin.addWidget(QLabel("Duração do plano:"))
             linha_assin.addWidget(self.combo_duracao)
 
             self.combo_periodicidade = QComboBox()
-            # periodicidade = frequência de envio (mensal/bimestral)
             self.combo_periodicidade.addItems(["mensal", "bimestral"])
             linha_assin.addWidget(QLabel("Periodicidade (envio):"))
             linha_assin.addWidget(self.combo_periodicidade)
             self.layout.addWidget(self.widget_assinatura)
 
             self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
-            self.radio_assinatura.toggled.connect(
-                lambda checked: self.widget_assinatura.setVisible(checked)
-            )
+
+            # Recarrega nomes internos quando muda o tipo
+            self.radio_assinatura.toggled.connect(lambda _checked: self._on_tipo_changed())
+            self.radio_produto.toggled.connect(lambda _checked: self._on_tipo_changed())
 
             # Botões
             botoes = QHBoxLayout()
@@ -510,13 +514,39 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
             self.btn_salvar.clicked.connect(self.salvar_selecao)
             self.btn_cancelar.clicked.connect(self.reject)
 
-            self.produtos = produtos_guru
-            self.produtos_restantes = produtos_guru.copy()
+            # Inicializa listas e combo
+            self._recarregar_combo_interno()
             self.iniciar()
 
+        # ----- helpers -----
+        def _on_tipo_changed(self) -> None:
+            # alterna visibilidade do bloco de assinatura
+            self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
+            self._recarregar_combo_interno()
+
+        def _nomes_internos_para_tipo(self) -> list[str]:
+            if self.radio_assinatura.isChecked():
+                # apenas itens já marcados como assinatura
+                return sorted(
+                    [n for n, info in self.skus_info.items() if (info.get("tipo") == "assinatura")]
+                )
+            else:
+                # itens que NÃO são assinatura (produto simples / combos)
+                return sorted(
+                    [n for n, info in self.skus_info.items() if (info.get("tipo") != "assinatura")]
+                )
+
+        def _recarregar_combo_interno(self) -> None:
+            self.combo_nome_interno.blockSignals(True)
+            self.combo_nome_interno.clear()
+            self.combo_nome_interno.addItems(self._nomes_internos_para_tipo())
+            self.combo_nome_interno.blockSignals(False)
+
+        # ----- UI data -----
         def iniciar(self):
             self.lista.clear()
-            termo = unidecode(self.input_nome.text().strip().lower())
+            # filtro opcional: por enquanto, sem campo de busca — lista todos os produtos do Guru
+            termo = ""  # se quiser filtro, adicione um QLineEdit e leia aqui
 
             for p in self.produtos:
                 titulo = (p.get("name") or "").strip()
@@ -525,28 +555,24 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
                 if not titulo and not market_id and not product_id:
                     continue
 
-                # filtro por nome e marketplace_id
                 alvo = unidecode(f"{titulo} {market_id}".lower())
                 if termo and termo not in alvo:
                     continue
 
-                # exibe marketplace_id; fallback para product_id se não houver
                 label = f"{titulo} (id:{market_id})" if market_id else f"{titulo} (id:{product_id})"
-
                 item = QListWidgetItem(label)
                 item.setData(Qt.UserRole, product_id)  # 🔒 salvaremos este ID
-                item.setData(Qt.UserRole + 1, market_id)  # 👀 apenas informativo
+                item.setData(Qt.UserRole + 1, market_id)  # 👀 informativo
                 item.setToolTip(
                     f"marketplace_id: {market_id or '-'}\nproduct_id: {product_id or '-'}"
                 )
                 self.lista.addItem(item)
 
+        # ----- salvar -----
         def salvar_selecao(self):
-            import re
-
-            nome_base_raw = self.input_nome.text().strip()
+            nome_base_raw = self.combo_nome_interno.currentText().strip()
             if not nome_base_raw:
-                QMessageBox.warning(self, "Aviso", "Você precisa informar um nome interno.")
+                QMessageBox.warning(self, "Aviso", "Você precisa selecionar um produto interno.")
                 return
 
             itens = self.lista.selectedItems()
@@ -567,21 +593,20 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
                 if not periodicidade:
                     QMessageBox.warning(self, "Aviso", "Selecione a periodicidade da assinatura.")
                     return
-                # remove eventual sufixo já digitado pelo operador: " (mensal)" / " (bimestral)"
+                # remove eventual sufixo digitado no interno (ex.: " (mensal)" / " (bimestral)")
                 nome_base = re.sub(
                     r"\s*\((mensal|bimestral)\)\s*$", "", nome_base_raw, flags=re.IGNORECASE
                 ).strip()
-                dest_key = f"{nome_base} ({periodicidade})"  # 🔑 SEMPRE com sufixo
+                dest_key = f"{nome_base} ({periodicidade})"  # 🔑 chave final sempre com sufixo
             else:
                 duracao = None
                 periodicidade = None
-                # para produto simples, não mexe no nome
-                dest_key = nome_base_raw
+                dest_key = nome_base_raw  # produto simples mantém o nome
 
-            # 🧹 Migra legado SEM sufixo → chave com sufixo (só para assinatura)
-            if is_assinatura and dest_key != nome_base_raw and nome_base_raw in skus_info:
-                legado = skus_info.pop(nome_base_raw) or {}
-                alvo = skus_info.setdefault(dest_key, {})
+            # 🧹 Migra legado SEM sufixo → chave com sufixo (somente para assinatura)
+            if is_assinatura and dest_key != nome_base_raw and nome_base_raw in self.skus_info:
+                legado = self.skus_info.pop(nome_base_raw) or {}
+                alvo = self.skus_info.setdefault(dest_key, {})
                 for k_list in ("guru_ids", "shopify_ids", "composto_de"):
                     if legado.get(k_list):
                         alvo.setdefault(k_list, [])
@@ -593,12 +618,11 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
                         alvo.setdefault(k, v)
 
             # 📌 Cria/atualiza SOMENTE a chave final (dest_key)
-            entrada = skus_info.setdefault(dest_key, {})
+            entrada = self.skus_info.setdefault(dest_key, {})
             if is_assinatura:
                 entrada["tipo"] = "assinatura"
                 entrada["recorrencia"] = duracao
                 entrada["periodicidade"] = periodicidade
-                # mantém estrutura padrão
                 entrada.setdefault("sku", "")
                 entrada.setdefault("peso", 0.0)
                 entrada.setdefault("composto_de", [])
@@ -615,10 +639,9 @@ def abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path):
                     ja.add(gid)
 
             with open(skus_path, "w", encoding="utf-8") as f:
-                json.dump(skus_info, f, indent=4, ensure_ascii=False)
+                json.dump(self.skus_info, f, indent=4, ensure_ascii=False)
 
             QMessageBox.information(self, "Sucesso", f"'{dest_key}' mapeado com sucesso!")
-            self.input_nome.clear()
             self.lista.clearSelection()
             self.iniciar()
 
@@ -991,7 +1014,7 @@ class RuleManagerDialog(QDialog):
     def __init__(self, parent, estado, skus_info, config_path):
         super().__init__(parent)
         self.setWindowTitle("⚖️ Regras (oferta/cupom)")
-        self.setMinimumSize(800, 600)
+        self.setMinimumSize(900, 600)
 
         self.estado = estado
         self.skus_info = skus_info
@@ -1005,12 +1028,49 @@ class RuleManagerDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Lista de regras
-        self.lista = QListWidget()
-        self.lista.setSelectionMode(QAbstractItemView.SingleSelection)
-        layout.addWidget(self.lista)
+        # ===== Abas com tabelas =====
+        self.tabs = QTabWidget(self)
+        layout.addWidget(self.tabs)
 
-        # Botões
+        # --- Aba: Cupons
+        self.tab_cupons = QWidget(self)
+        v_cupons = QVBoxLayout(self.tab_cupons)
+        self.tbl_cupons = QTableWidget(self.tab_cupons)
+        self.tbl_cupons.setColumnCount(4)
+        self.tbl_cupons.setHorizontalHeaderLabels(
+            [
+                "Cupom",
+                "Tipo de ação",
+                "Box/Brindes",
+                "Plano",
+            ]
+        )
+        self.tbl_cupons.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_cupons.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_cupons.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_cupons.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        v_cupons.addWidget(self.tbl_cupons)
+        self.tabs.addTab(self.tab_cupons, "Cupons")
+
+        # --- Aba: Ofertas
+        self.tab_ofertas = QWidget(self)
+        v_ofertas = QVBoxLayout(self.tab_ofertas)
+        self.tbl_ofertas = QTableWidget(self.tab_ofertas)
+        self.tbl_ofertas.setColumnCount(2)
+        self.tbl_ofertas.setHorizontalHeaderLabels(
+            [
+                "Nome da oferta",
+                "Brinde",
+            ]
+        )
+        self.tbl_ofertas.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_ofertas.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_ofertas.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_ofertas.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        v_ofertas.addWidget(self.tbl_ofertas)
+        self.tabs.addTab(self.tab_ofertas, "Ofertas")
+
+        # ===== Botões =====
         linha_btns = QHBoxLayout()
         self.btn_add = QPushButton("+ Adicionar")
         self.btn_edit = QPushButton("✏️ Editar")
@@ -1039,7 +1099,7 @@ class RuleManagerDialog(QDialog):
         self.btn_salvar.clicked.connect(self._salvar)
 
         # preencher
-        self._refresh_list()
+        self._refresh_tables()
 
     # ---------- índices / helpers ----------
     def _build_indices(self):
@@ -1057,7 +1117,6 @@ class RuleManagerDialog(QDialog):
                 if oid:
                     self._offer_index[oid] = o
 
-        # Também aceita um flat no estado (caso exista):
         for o in self.estado.get("ofertas_guru") or []:
             oid = str(o.get("id") or o.get("oferta_id") or "")
             if oid and oid not in self._offer_index:
@@ -1081,15 +1140,6 @@ class RuleManagerDialog(QDialog):
         return nome or str(oferta_id) or "?"
 
     def _format_assinaturas(self, r):
-        """
-        Converte nomes de assinatura para rótulos curtos:
-        - "Assinatura Anual (mensal)"   -> "Anual"
-        - "Assinatura 2 anos (mensal)"  -> "2 anos"
-        - "Assinatura 3 anos (mensal)"  -> "3 anos"
-        - "Assinatura Bimestral (...)"  -> "Bimestral"
-        - "Assinatura Mensal (...)"     -> "Mensal"
-        Aceita lista/str e procura em r, r['cupom'] e r['oferta'].
-        """
         raw = (
             r.get("assinaturas")
             or (r.get("cupom") or {}).get("assinaturas")
@@ -1103,26 +1153,18 @@ class RuleManagerDialog(QDialog):
             if not s:
                 return ""
             t = str(s).strip()
-            # remove parênteses e conteúdos
-            t = re.sub(r"\s*\(.*?\)\s*", "", t, flags=re.I)
-            # remove prefixo "Assinatura" e corta por tracos (-)
+            t = re.sub(r"\s*\(.*?\)\s*", "", t, flags=re.I)  # remove parênteses
             t = re.sub(r"^\s*assinatura\s+", "", t, flags=re.I)
             t = re.split(r"\s*[\u2013\u2014-]\s*", t)[0].strip()
-
-            # "2 anos", "3 anos", etc.
             m = re.search(r"(\d+)\s*anos?", t, flags=re.I)
             if m:
                 return f"{int(m.group(1))} anos"
-
-            # palavras-chave
             if re.search(r"\banual\b", t, flags=re.I):
                 return "Anual"
             if re.search(r"\bbimestral\b", t, flags=re.I):
                 return "Bimestral"
             if re.search(r"\bmensal\b", t, flags=re.I):
                 return "Mensal"
-
-            # fallback
             return t.title()
 
         vistos = set()
@@ -1135,97 +1177,115 @@ class RuleManagerDialog(QDialog):
                 out.append(p)
         return ", ".join(out)
 
-    def _rule_title(self, r):
-        # prefixo
-        if r.get("applies_to") == "cupom":
-            nome = ((r.get("cupom") or {}).get("nome") or "").strip()
-            prefixo = f"[CUPOM:{nome or '?'}]"
-        else:
-            of = r.get("oferta") or {}
-            oferta_lbl = (
-                of.get("nome")  # 1) usa nome salvo no JSON
-                or self._label_oferta(of.get("oferta_id"))  # 2) fallback para label pelo ID
-                or of.get("oferta_id")  # 3) fallback para o próprio ID
-                or "?"
-            )
-            prefixo = f"[OFERTA:{oferta_lbl}]"
+    def _tipo_acao(self, a: dict) -> str:
+        return (a or {}).get("type") or (a or {}).get("acao") or ""
 
-        a = r.get("action") or {}
-        partes = []
+    def _coletar_brindes(self, action: dict):
+        if not action:
+            return []
+        keys = ["brindes", "gifts", "add_items", "add", "extras", "itens", "items"]
+        val = next((action.get(k) for k in keys if action.get(k) is not None), None)
+        if val is None:
+            return []
+        if isinstance(val, dict):
+            val = [val]
+        itens = []
+        for g in val:
+            if isinstance(g, str):
+                itens.append({"nome": g.strip(), "qtd": 1})
+            elif isinstance(g, dict):
+                qtd = g.get("qtd") or g.get("qty") or g.get("quantidade") or 1
+                nome = (
+                    (g.get("nome") or "").strip()
+                    or (self._label_produto(g.get("produto_id")) or "").strip()
+                    or (g.get("sku") or "").strip()
+                    or "?"
+                )
+                itens.append({"nome": nome, "qtd": int(qtd)})
+        agg = OrderedDict()
+        for it in itens:
+            agg[it["nome"]] = agg.get(it["nome"], 0) + it["qtd"]
+        return [{"nome": k, "qtd": v} for k, v in agg.items()]
 
-        # 🎁 Brindes (agrega itens iguais somando quantidades)
-        def coletar_brindes(action):
-            keys = ["brindes", "gifts", "add_items", "add", "extras", "itens", "items"]
-            val = next((action.get(k) for k in keys if action.get(k) is not None), None)
-            if val is None:
-                return []
-            if isinstance(val, dict):
-                val = [val]
-            itens = []
-            for g in val:
-                if isinstance(g, str):
-                    itens.append({"nome": g.strip(), "qtd": 1})
-                elif isinstance(g, dict):
-                    qtd = g.get("qtd") or g.get("qty") or g.get("quantidade") or 1
-                    nome = (
-                        (g.get("nome") or "").strip()
-                        or (self._label_produto(g.get("produto_id")) or "").strip()
-                        or (g.get("sku") or "").strip()
-                        or "?"
-                    )
-                    itens.append({"nome": nome, "qtd": int(qtd)})
-            # agrega preservando ordem de primeira aparição
-            agg = OrderedDict()
-            for it in itens:
-                agg[it["nome"]] = agg.get(it["nome"], 0) + it["qtd"]
-            return [{"nome": k, "qtd": v} for k, v in agg.items()]
+    def _pegar_box(self, action: dict) -> str:
+        if not action:
+            return ""
+        for k in ["novo_box", "box", "replace_box", "swap_box", "box_name"]:
+            if action.get(k):
+                return str(action[k]).strip()
+        return ""
 
-        brindes = coletar_brindes(a)
-        if brindes:
-            partes.append("🎁 " + " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes))
-
-        # 📦 Box
-        def pegar_box(action):
-            for k in ["novo_box", "box", "replace_box", "swap_box", "box_name"]:
-                if action.get(k):
-                    return str(action[k]).strip()
-            return None
-
-        box = pegar_box(a)
-        if box:
-            partes.append(f"📦 BOX → {box}")
-
-        # 🧾 Assinaturas (curtas)
-        alvos = self._format_assinaturas(r)
-        if alvos:
-            partes.append(f"Assinaturas: {alvos}")
-
-        if not partes:
-            partes.append(str(a.get("type") or "?"))
-
-        return f"{prefixo}  " + "  •  ".join(partes)
-
-    def _refresh_list(self):
+    # ---------- UI refresh ----------
+    def _refresh_tables(self):
         # reconstruir índices caso o estado tenha sido atualizado externamente
         self._build_indices()
-        self.lista.clear()
-        for r in self.estado["rules"]:
-            item = QListWidgetItem(self._rule_title(r))
-            item.setData(Qt.UserRole, r)
-            self.lista.addItem(item)
+
+        # zera as tabelas e mapas
+        self.tbl_cupons.setRowCount(0)
+        self.tbl_ofertas.setRowCount(0)
+        self._map_cupons = []  # cada item armazena o índice real em estado["rules"]
+        self._map_ofertas = []
+
+        for i, r in enumerate(self.estado["rules"]):
+            a = r.get("action") or {}
+            if r.get("applies_to") == "cupom":
+                # colunas: Cupom | Tipo de ação | Box/Brindes | Plano
+                cupom = ((r.get("cupom") or {}).get("nome") or "").strip() or "—"
+                tipo = self._tipo_acao(a) or "—"
+                box = self._pegar_box(a)
+                if tipo == "adicionar_brindes":
+                    brindes = self._coletar_brindes(a)
+                    box_ou_brindes = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes) or "—"
+                else:
+                    box_ou_brindes = box or "—"
+                plano = self._format_assinaturas(r) or "—"
+
+                row = self.tbl_cupons.rowCount()
+                self.tbl_cupons.insertRow(row)
+                self.tbl_cupons.setItem(row, 0, QTableWidgetItem(cupom))
+                self.tbl_cupons.setItem(row, 1, QTableWidgetItem(tipo))
+                self.tbl_cupons.setItem(row, 2, QTableWidgetItem(box_ou_brindes))
+                self.tbl_cupons.setItem(row, 3, QTableWidgetItem(plano))
+                self._map_cupons.append(i)
+
+            else:  # oferta
+                # colunas: Nome da oferta | Brinde
+                of = r.get("oferta") or {}
+                nome = (of.get("nome") or self._label_oferta(of.get("oferta_id")) or "—").strip()
+                brinde = ""
+                if self._tipo_acao(a) == "adicionar_brindes":
+                    brindes = self._coletar_brindes(a)
+                    brinde = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes)
+                brinde = brinde or "—"
+
+                row = self.tbl_ofertas.rowCount()
+                self.tbl_ofertas.insertRow(row)
+                self.tbl_ofertas.setItem(row, 0, QTableWidgetItem(nome))
+                self.tbl_ofertas.setItem(row, 1, QTableWidgetItem(brinde))
+                self._map_ofertas.append(i)
+
+    # ---------- helpers de seleção ----------
+    def _current_table_and_map(self):
+        if self.tabs.currentWidget() is self.tab_cupons:
+            return self.tbl_cupons, self._map_cupons
+        return self.tbl_ofertas, self._map_ofertas
 
     def _selected_index(self):
-        row = self.lista.currentRow()
-        return row if row >= 0 else None
+        table, idx_map = self._current_table_and_map()
+        row = table.currentRow()
+        if row < 0 or row >= len(idx_map):
+            return None
+        return idx_map[row]
 
     # ---------- ações ----------
     def _add(self):
+        # abre o editor “em branco” e adiciona ao final
         dlg = RuleEditorDialog(
             self, self.skus_info, regra=None, produtos_guru=self.estado.get("produtos_guru")
         )
         if dlg.exec_() == QDialog.Accepted:
             self.estado["rules"].append(dlg.get_regra())
-            self._refresh_list()
+            self._refresh_tables()
 
     def _edit(self):
         idx = self._selected_index()
@@ -1237,8 +1297,9 @@ class RuleManagerDialog(QDialog):
         )
         if dlg.exec_() == QDialog.Accepted:
             self.estado["rules"][idx] = dlg.get_regra()
-            self._refresh_list()
-            self.lista.setCurrentRow(idx)
+            self._refresh_tables()
+            # re-seleciona aproximadamente o mesmo item
+            self._reselect(idx)
 
     def _dup(self):
         idx = self._selected_index()
@@ -1247,8 +1308,8 @@ class RuleManagerDialog(QDialog):
         r = json.loads(json.dumps(self.estado["rules"][idx]))  # deep copy
         r["id"] = gerar_uuid()
         self.estado["rules"].insert(idx + 1, r)
-        self._refresh_list()
-        self.lista.setCurrentRow(idx + 1)
+        self._refresh_tables()
+        self._reselect(idx + 1)
 
     def _del(self):
         idx = self._selected_index()
@@ -1261,29 +1322,21 @@ class RuleManagerDialog(QDialog):
             == QMessageBox.Yes
         ):
             del self.estado["rules"][idx]
-            self._refresh_list()
+            self._refresh_tables()
 
     def _up(self):
         idx = self._selected_index()
-        if idx is None or idx == 0:
+        if idx is None:
             return
-        self.estado["rules"][idx - 1], self.estado["rules"][idx] = (
-            self.estado["rules"][idx],
-            self.estado["rules"][idx - 1],
-        )
-        self._refresh_list()
-        self.lista.setCurrentRow(idx - 1)
+        # mover “para cima” dentro do mesmo grupo (cupom/oferta)
+        self._move_relative_in_group(idx, -1)
 
     def _down(self):
         idx = self._selected_index()
-        if idx is None or idx == len(self.estado["rules"]) - 1:
+        if idx is None:
             return
-        self.estado["rules"][idx + 1], self.estado["rules"][idx] = (
-            self.estado["rules"][idx],
-            self.estado["rules"][idx + 1],
-        )
-        self._refresh_list()
-        self.lista.setCurrentRow(idx + 1)
+        # mover “para baixo” dentro do mesmo grupo (cupom/oferta)
+        self._move_relative_in_group(idx, +1)
 
     def _salvar(self):
         try:
@@ -1291,6 +1344,41 @@ class RuleManagerDialog(QDialog):
             QMessageBox.information(self, "Salvo", "Regras salvas em config_ofertas.json.")
         except Exception as e:
             QMessageBox.critical(self, "Erro", f"Falha ao salvar: {e}")
+
+    # ---------- movimento preservando o agrupamento ----------
+    def _move_relative_in_group(self, idx_global: int, delta: int):
+        """Move a regra idx_global para cima/baixo, mas apenas trocando com vizinhos do MESMO grupo (applies_to)."""
+        if not (-1 <= delta <= 1) or delta == 0:
+            return
+        rules = self.estado["rules"]
+        if not (0 <= idx_global < len(rules)):
+            return
+        group = rules[idx_global].get("applies_to") or "oferta"
+        # procura o vizinho mais próximo no mesmo grupo
+        j = idx_global + delta
+        while 0 <= j < len(rules) and (rules[j].get("applies_to") or "oferta") != group:
+            j += delta
+        if 0 <= j < len(rules):
+            rules[idx_global], rules[j] = rules[j], rules[idx_global]
+            self._refresh_tables()
+            self._reselect(j)
+
+    def _reselect(self, idx_global: int):
+        """Após refresh, reposiciona a seleção na aba/tabela correspondente a idx_global."""
+        r = self.estado["rules"][idx_global]
+        if r.get("applies_to") == "cupom":
+            # encontre linha na tabela de cupons cujo map aponta para idx_global
+            for row, gi in enumerate(self._map_cupons):
+                if gi == idx_global:
+                    self.tabs.setCurrentWidget(self.tab_cupons)
+                    self.tbl_cupons.setCurrentCell(row, 0)
+                    return
+        else:
+            for row, gi in enumerate(self._map_ofertas):
+                if gi == idx_global:
+                    self.tabs.setCurrentWidget(self.tab_ofertas)
+                    self.tbl_ofertas.setCurrentCell(row, 0)
+                    return
 
 
 ############################################
@@ -7114,141 +7202,182 @@ def tratar_erro(gerenciador):
 # Funções de mapeamento dos produtos da Loja
 
 
-def abrir_dialogo_mapeamento_skus(skus_info, produtos_shopify, skus_path):
+def abrir_dialogo_mapeamento_shopify(skus_info, produtos_shopify, skus_path):
     class DialogoMapeamento(QDialog):
         def __init__(self):
             super().__init__()
             self.setWindowTitle("Mapear SKUs com Produtos da Shopify")
-            self.setMinimumSize(800, 500)
+            self.setMinimumSize(900, 560)
 
             layout = QVBoxLayout(self)
 
-            self.label_sku_atual = QLabel("Produto local: (nenhum)")
-            layout.addWidget(self.label_sku_atual)
+            # --- seletor de produto interno (sem texto livre) ---
+            linha_sel = QHBoxLayout()
+            linha_sel.addWidget(QLabel("Produto interno:"))
+            self.combo_interno = QComboBox()
+            self.combo_interno.setEditable(False)
+            self.combo_interno.addItems(sorted(skus_info.keys()))
+            self.combo_interno.currentTextChanged.connect(self._popular_lista)
+            linha_sel.addWidget(self.combo_interno)
 
-            # Filtro
-            busca_row = QHBoxLayout()
-            busca_row.addWidget(QLabel("Filtro:"))
+            # filtro opcional por SKU da Shopify
+            linha_sel.addWidget(QLabel("Filtrar SKU (Shopify):"))
             self.input_busca = QLineEdit()
-            self.input_busca.setPlaceholderText("Digite para filtrar produtos da Shopify…")
-            busca_row.addWidget(self.input_busca)
-            layout.addLayout(busca_row)
+            self.input_busca.setPlaceholderText("ex.: B050A, L002A…")
+            self.input_busca.textChanged.connect(self._popular_lista)
+            linha_sel.addStretch(1)
+            layout.addLayout(linha_sel)
 
+            # lista (multi-seleção) de itens/variantes da Shopify
             self.lista = QListWidget()
             self.lista.setSelectionMode(QAbstractItemView.MultiSelection)
+            layout.addWidget(QLabel("Selecione os itens/variantes da Shopify para mapear:"))
             layout.addWidget(self.lista)
 
-            # Botões
+            # botões
             botoes = QHBoxLayout()
-            self.btn_pular = QPushButton("Pular")
-            self.btn_salvar = QPushButton("Salvar e Próximo")
+            self.btn_salvar = QPushButton("Salvar mapeamento")
             self.btn_concluir = QPushButton("Concluir")
-            botoes.addWidget(self.btn_pular)
             botoes.addStretch(1)
             botoes.addWidget(self.btn_salvar)
             botoes.addWidget(self.btn_concluir)
             layout.addLayout(botoes)
 
-            # Estado
-            self.skus = list(skus_info.keys())
-            self.idx_atual = 0
-            self.produtos = produtos_shopify or []
-
-            # Sinais
-            self.btn_pular.clicked.connect(self.pular)
-            self.btn_salvar.clicked.connect(self.salvar_selecao)
+            self.btn_salvar.clicked.connect(self._salvar)
             self.btn_concluir.clicked.connect(self.accept)
-            self.input_busca.textChanged.connect(self._popular_lista)
 
-            # atalhos práticos
-            QShortcut(QKeySequence("Ctrl+Right"), self, activated=self.pular)
-            QShortcut(QKeySequence("Ctrl+S"), self, activated=self.salvar_selecao)
+            # atalhos
+            QShortcut(QKeySequence("Ctrl+S"), self, activated=self._salvar)
 
-            # inicia
-            self._iniciar_proximo()
+            # dados de entrada
+            self.skus_info = skus_info
+            self.entries = self._flatten_shopify(produtos_shopify or [])
 
-        def _iniciar_proximo(self):
-            if self.idx_atual >= len(self.skus):
-                with open(skus_path, "w", encoding="utf-8") as f:
-                    json.dump(skus_info, f, indent=4, ensure_ascii=False)
-                QMessageBox.information(self, "Concluído", "Mapeamento finalizado com sucesso.")
-                self.accept()
-                return
-
-            self.lista.clear()
-            self.input_busca.clear()
-            self.nome_local = self.skus[self.idx_atual]
-            self.label_sku_atual.setText(f"Produto local: {self.nome_local}")
+            # primeira carga
             self._popular_lista()
 
-        def _popular_lista(self):
-            termo = unidecode(self.input_busca.text().strip().lower())
+        # ---------- helpers ----------
+        @staticmethod
+        def _norm_sku(s: str) -> str:
+            return re.sub(r"[^A-Za-z0-9]", "", (s or "").strip().upper())
+
+        def _sku_interno_atual(self) -> str:
+            interno = self.combo_interno.currentText().strip()
+            if interno and interno in self.skus_info:
+                return str(self.skus_info[interno].get("sku", "") or "")
+            return ""
+
+        def _flatten_shopify(self, produtos) -> list[dict]:
+            """
+            Normaliza produtos/variantes da Shopify em itens planos com:
+              {'display', 'sku', 'id', 'product_id', 'variant_id'}
+            Prefere variant_id como 'id'; se não houver variants, usa product_id.
+            """
+            out: list[dict] = []
+            for p in produtos:
+                titulo = (p.get("title") or p.get("name") or "").strip()
+                pid = p.get("id") or p.get("product_id")
+                variants = p.get("variants") or []
+                if isinstance(variants, list) and variants:
+                    for v in variants:
+                        vid = v.get("id")
+                        vsku = str(v.get("sku") or "").strip()
+                        disp = f"{titulo}  (SKU: {vsku or '-'})  [id: {vid or pid}]"
+                        out.append(
+                            {
+                                "display": disp,
+                                "sku": vsku,
+                                "id": (vid or pid),
+                                "product_id": pid,
+                                "variant_id": vid,
+                            }
+                        )
+                else:
+                    vsku = str(p.get("sku") or "").strip()
+                    disp = f"{titulo}  (SKU: {vsku or '-'})  [id: {pid}]"
+                    out.append(
+                        {
+                            "display": disp,
+                            "sku": vsku,
+                            "id": pid,
+                            "product_id": pid,
+                            "variant_id": None,
+                        }
+                    )
+            return [e for e in out if e.get("id") is not None]
+
+        # ---------- UI ----------
+        def _popular_lista(self) -> None:
             self.lista.clear()
 
-            nome_norm = unidecode(str(self.nome_local).lower())
-            for p in self.produtos:
-                titulo = p.get("name") or p.get("title") or ""
-                pid = str(p.get("id") or p.get("product_id") or "").strip()
-                if not pid:
-                    continue
-                titulo_norm = unidecode(titulo.lower())
-                passa_nome = (nome_norm in titulo_norm) or (titulo_norm in nome_norm)
-                passa_termo = (not termo) or (termo in titulo_norm) or (termo in pid)
-                if passa_nome and passa_termo:
-                    it = QListWidgetItem(f"{titulo}  [{pid}]")
-                    it.setData(Qt.UserRole, pid)
-                    it.setToolTip(f"product_id: {pid}")
-                    self.lista.addItem(it)
+            sku_interno = self._sku_interno_atual()
+            filtro_user = self.input_busca.text().strip()
 
-        def pular(self):
-            # não salva nada para este produto local; apenas avança
-            self.idx_atual += 1
-            self._iniciar_proximo()
+            norm_interno = self._norm_sku(sku_interno)
+            norm_filtro = self._norm_sku(filtro_user)
 
-        def salvar_selecao(self):
-            itens = self.lista.selectedItems()
-            if not itens:
-                # permitir salvar “vazio” também? você decide.
-                # aqui vou só avisar:
-                if (
-                    QMessageBox.question(
-                        self,
-                        "Sem seleção",
-                        "Nenhum produto selecionado. Deseja pular este item?",
-                        QMessageBox.Yes | QMessageBox.No,
-                    )
-                    == QMessageBox.Yes
-                ):
-                    self.pular()
+            def match(e: dict) -> bool:
+                esk = self._norm_sku(e.get("sku", ""))
+                # bater por SKU interno; filtro é refinamento opcional
+                ok_interno = (
+                    True if not norm_interno else (esk == norm_interno or (norm_interno in esk))
+                )
+                ok_filtro = True if not norm_filtro else (norm_filtro in esk)
+                return ok_interno and ok_filtro
+
+            candidatos = [e for e in self.entries if match(e)]
+            if not candidatos and not (norm_interno or norm_filtro):
+                candidatos = self.entries  # fallback: evita tela vazia
+
+            for e in candidatos:
+                it = QListWidgetItem(e["display"])
+                it.setData(Qt.UserRole, e["id"])
+                it.setData(Qt.UserRole + 1, e.get("sku", ""))
+                self.lista.addItem(it)
+
+        # ---------- salvar ----------
+        def _salvar(self) -> None:
+            interno = self.combo_interno.currentText().strip()
+            if not interno:
+                QMessageBox.warning(self, "Aviso", "Selecione o produto interno.")
+                return
+            if interno not in self.skus_info:
+                QMessageBox.warning(self, "Aviso", "Produto interno inválido.")
                 return
 
-            novos_ids = [
-                str(it.data(Qt.UserRole) or "").strip()
-                for it in itens
-                if str(it.data(Qt.UserRole) or "").strip()
-            ]
+            itens = self.lista.selectedItems()
+            if not itens:
+                QMessageBox.information(self, "Aviso", "Nenhum item selecionado.")
+                return
 
-            entrada = skus_info.setdefault(self.nome_local, {})
-            entrada.setdefault("tipo", entrada.get("tipo") or "produto")
-            entrada.setdefault("sku", entrada.get("sku", ""))
-            entrada.setdefault("peso", entrada.get("peso", 0.0))
+            ids_sel: list[str] = []
+            for it in itens:
+                val = str(it.data(Qt.UserRole) or "").strip()
+                if val:
+                    ids_sel.append(val)
+
+            entrada = self.skus_info.setdefault(interno, {})
             entrada.setdefault("shopify_ids", [])
-
             ja = set(map(str, entrada["shopify_ids"]))
-            for pid in novos_ids:
-                if pid not in ja:
-                    entrada["shopify_ids"].append(pid)
-                    ja.add(pid)
+            for sid in ids_sel:
+                if sid not in ja:
+                    # armazene como int quando possível
+                    try:
+                        entrada["shopify_ids"].append(int(sid))
+                    except Exception:
+                        entrada["shopify_ids"].append(sid)
+                    ja.add(sid)
 
             try:
                 with open(skus_path, "w", encoding="utf-8") as f:
-                    json.dump(skus_info, f, indent=4, ensure_ascii=False)
+                    json.dump(self.skus_info, f, indent=4, ensure_ascii=False)
             except Exception as e:
-                QMessageBox.warning(self, "Aviso", f"Não foi possível salvar no disco agora: {e}")
+                QMessageBox.warning(self, "Aviso", f"Não foi possível salvar: {e}")
+                return
 
-            # feedback rápido e avança
-            self.idx_atual += 1
-            self._iniciar_proximo()
+            QMessageBox.information(
+                self, "Sucesso", f"Mapeados {len(ids_sel)} item(ns) para '{interno}'."
+            )
 
     dlg = DialogoMapeamento()
     dlg.exec_()
@@ -7259,7 +7388,7 @@ def mapear_skus_com_produtos_shopify(skus_info):
     if not produtos:
         QMessageBox.warning(None, "Erro", "Nenhum produto retornado da Shopify.")
         return
-    abrir_dialogo_mapeamento_skus(skus_info, produtos, skus_path)
+    abrir_dialogo_mapeamento_shopify(skus_info, produtos, skus_path)
 
 
 def buscar_todos_produtos_shopify():
@@ -8342,9 +8471,9 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
 
     # 📚 Combos
     tabela_combo: QTableWidget = QTableWidget()
-    tabela_combo.setColumnCount(6)
+    tabela_combo.setColumnCount(7)
     tabela_combo.setHorizontalHeaderLabels(
-        ["Nome", "Composto de", "Guru IDs", "Shopify IDs", "Preço Fallback", "Indisp."]
+        ["Nome", "SKU", "Composto de", "Guru IDs", "Shopify IDs", "Preço Fallback", "Indisp."]
     )
 
     for tabela in [tabela_prod, tabela_assin, tabela_combo]:
@@ -8481,16 +8610,17 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 row = tabela_combo.rowCount()
                 tabela_combo.insertRow(row)
                 tabela_combo.setItem(row, 0, QTableWidgetItem(nome))
+                tabela_combo.setItem(row, 1, QTableWidgetItem(info.get("sku", "")))
                 tabela_combo.setItem(
-                    row, 1, QTableWidgetItem(", ".join(info.get("composto_de", [])))
+                    row, 2, QTableWidgetItem(", ".join(info.get("composto_de", [])))
                 )
-                tabela_combo.setItem(row, 2, QTableWidgetItem(", ".join(info.get("guru_ids", []))))
+                tabela_combo.setItem(row, 3, QTableWidgetItem(", ".join(info.get("guru_ids", []))))
                 tabela_combo.setItem(
-                    row, 3, QTableWidgetItem(", ".join(str(i) for i in info.get("shopify_ids", [])))
+                    row, 4, QTableWidgetItem(", ".join(str(i) for i in info.get("shopify_ids", [])))
                 )
-                tabela_combo.setItem(row, 4, QTableWidgetItem(str(info.get("preco_fallback", ""))))
+                tabela_combo.setItem(row, 5, QTableWidgetItem(str(info.get("preco_fallback", ""))))
                 tabela_combo.setCellWidget(
-                    row, 5, _mk_checkbox(bool(info.get("indisponivel", False)))
+                    row, 6, _mk_checkbox(bool(info.get("indisponivel", False)))
                 )
             # PRODUTOS
             else:
@@ -8581,7 +8711,8 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 item = tabela_combo.item(_row, col)
                 return item.text().strip() if item else ""
 
-            nome, composto, guru, shopify, preco_str = map(get, range(5))
+            nome, sku, composto, guru, shopify = map(get, range(5))
+            preco: float | None = float(preco_str) if preco_str else None
             if not nome:
                 continue
             try:
@@ -8589,13 +8720,13 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
             except (ValueError, TypeError):
                 preco_c = None
             skus[nome] = {
-                "sku": "",
+                "sku": sku,
                 "peso": 0.0,
                 "tipo": "produto",  # você usa "produto" pra combos, mantive
                 "composto_de": [x.strip() for x in composto.split(",") if x.strip()],
                 "guru_ids": [x.strip() for x in guru.split(",") if x.strip()],
                 "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
-                "indisponivel": _get_checkbox(tabela_combo, row, 5),  # << AQUI
+                "indisponivel": _get_checkbox(tabela_combo, row, 6),  # << AQUI
             }
             if preco_c is not None:
                 skus[nome]["preco_fallback"] = preco_c
