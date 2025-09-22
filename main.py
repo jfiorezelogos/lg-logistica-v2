@@ -8,7 +8,6 @@ import random
 import re
 import shutil
 import subprocess
-import sys
 import threading
 import time
 import traceback
@@ -18,13 +17,15 @@ import xml.etree.ElementTree as ET
 import zipfile
 from calendar import monthrange
 from collections import Counter, OrderedDict, defaultdict
+from collections.abc import Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from functools import partial
 from json import JSONDecodeError
+from os import PathLike
 from threading import Event
-from typing import Any, TypedDict, cast
+from typing import Any, Literal, Protocol, TypedDict, cast
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -41,6 +42,7 @@ from openai import RateLimitError
 from PyQt5.QtCore import (
     QCoreApplication,
     QDate,
+    QModelIndex,
     QObject,
     QRunnable,
     Qt,
@@ -126,7 +128,7 @@ def run_gui() -> int:
     return 0
 
 
-def _load_payload_from_arg(value: str) -> dict:
+def _load_payload_from_arg(value: str) -> dict[Any, Any]:
     """
     Aceita JSON inline OU caminho para arquivo .json/.yaml/.yml contendo a config.
     Se for caminho, tentamos carregar; caso contrário, tratamos como JSON string.
@@ -135,105 +137,74 @@ def _load_payload_from_arg(value: str) -> dict:
     import os
 
     try:
-        # caminho de arquivo?
-        if os.path.exists(value):
-            # suporte básico a JSON; se quiser YAML, adicione pyyaml aqui depois
+        is_path = os.path.exists(value)
+
+        if is_path:
+            # arquivo
             with open(value, encoding="utf-8") as f:
                 txt = f.read()
             try:
-                return json.loads(txt)
+                parsed: Any = json.loads(txt)
             except json.JSONDecodeError as e:
                 raise UserError(
                     "Arquivo de configuração não é JSON válido",
                     code="BAD_JSON_FILE",
                     data={"path": value},
                 ) from e
-        # JSON inline
-        return json.loads(value)
+        else:
+            # JSON inline
+            parsed = json.loads(value)
+
+        if not isinstance(parsed, dict):
+            if is_path:
+                raise UserError(
+                    "Arquivo de configuração deve ser um objeto JSON",
+                    code="BAD_JSON_FILE",
+                    data={"path": value},
+                )
+            raise UserError(
+                "Configuração inline deve ser um objeto JSON",
+                code="BAD_JSON",
+                data={"value": value},
+            )
+
+        return cast(dict[Any, Any], parsed)
+
     except json.JSONDecodeError as e:
+        # fallback geral para JSON inline inválido
         raise UserError("JSON inválido em --config", code="BAD_JSON", data={"value": value}) from e
 
 
-@safe_cli
-def main(argv: list[str] | None = None) -> int:
-    """
-    Entry point F-I-N-O com tratamento de erros padronizado pelo cli_safe.
-    - Modo padrão: GUI
-    - Modo CLI: valida entrada e executa orquestração (quando existir)
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        prog="lg-logistica",
-        description="Aplicação de logística (GUI por padrão; CLI opcional).",
-    )
-    parser.add_argument(
-        "--mode",
-        choices=["gui", "cli"],
-        default="gui",
-        help="Modo de execução: gui (padrão) ou cli.",
-    )
-    parser.add_argument(
-        "--config",
-        help="(CLI) JSON inline ou caminho para arquivo .json com a configuração.",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Mostra detalhes de erro (equivalente a DEBUG=1).",
-    )
-
-    args = parser.parse_args(argv)
-
-    # inicia logging e correlation id
-    setup_logging(
-        level=logging.INFO, json_console=True, file_path=os.path.join(caminho_base(), "sistema.log")
-    )
-    set_correlation_id()
-
-    if args.mode == "gui":
-        return run_gui()
-
-    # --- CLI ---
-    if not args.config:
-        raise UserError(
-            "Uso (CLI): --mode cli --config '<json>' | --config caminho/para/config.json",
-            code="USAGE",
-        )
-
-    payload = _load_payload_from_arg(args.config)
-    cfg = validate_config(payload)
-    ensure_paths(cfg)
-
-    # caso você já tenha um orquestrador (vamos criar no Passo 3/4):
-    # from app.runner import run_from_cfg
-    # return int(run_from_cfg(cfg) or 0)
-
-    # provisório: confirme a entrada válida e retorne sucesso
-    print(f"OK (CLI): {cfg.input_path} -> {cfg.output_dir} (dry_run={cfg.dry_run})")
-    return 0
-
-
-def slot_mostrar_mensagem(tipo, titulo, texto):
+@pyqtSlot(str, str, str)
+def slot_mostrar_mensagem(
+    tipo: Literal["erro", "info", "warn", "warning"],
+    titulo: str,
+    texto: str,
+) -> None:
     msg = QMessageBox()
-    if tipo == "erro":
+    if tipo in ("erro",):
         msg.setIcon(QMessageBox.Critical)
-    elif tipo == "info":
+    elif tipo in ("info",):
         msg.setIcon(QMessageBox.Information)
-    else:
+    else:  # "warn" / "warning" (ou qualquer outro → Warning)
         msg.setIcon(QMessageBox.Warning)
     msg.setWindowTitle(titulo)
     msg.setText(texto)
-    msg.exec_()
+    msg.exec_()  # se migrar para PyQt6: use msg.exec()
 
 
 comunicador_global.mostrar_mensagem.connect(slot_mostrar_mensagem)
 
 
-def caminho_base():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(sys.executable)
-    return os.path.dirname(__file__)
+class _CliCfg(Protocol):
+    input_path: str
+    output_dir: str
+    dry_run: bool
+
+
+def caminho_base() -> str:
+    """Diretório onde está o main.py (independe do cwd)."""
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 limite_gpt = threading.Semaphore(4)
@@ -307,11 +278,27 @@ def local_now() -> datetime:
     return datetime.now(TZ_APP)
 
 
-def aware_local(y: int, m: int, d: int, hh=0, mm=0, ss=0, us=0) -> datetime:
+def aware_local(
+    y: int,
+    m: int,
+    d: int,
+    hh: int = 0,
+    mm: int = 0,
+    ss: int = 0,
+    us: int = 0,
+) -> datetime:
     return datetime(y, m, d, hh, mm, ss, us, tzinfo=TZ_APP)
 
 
-def aware_utc(y: int, m: int, d: int, hh=0, mm=0, ss=0, us=0) -> datetime:
+def aware_utc(
+    y: int,
+    m: int,
+    d: int,
+    hh: int = 0,
+    mm: int = 0,
+    ss: int = 0,
+    us: int = 0,
+) -> datetime:
     return datetime(y, m, d, hh, mm, ss, us, tzinfo=UTC)
 
 
@@ -353,17 +340,16 @@ def _aware_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
-def _as_dt(x):
-    """Aceita datetime/str ISO e devolve datetime UTC aware."""
-    if isinstance(x, datetime):
-        return _aware_utc(x)
+def _as_dt(x: datetime | str) -> datetime:
+    """Aceita datetime ou string ISO e devolve um datetime *aware* em UTC."""
     try:
-        # tenta ISO; se vier naive, marca UTC
-        d = datetime.fromisoformat(str(x))
-        return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
-    except Exception:
-        # fallback conservador: recusa em vez de criar naive
-        raise
+        d: datetime = x if isinstance(x, datetime) else datetime.fromisoformat(x)
+    except (TypeError, ValueError) as e:
+        # Recusa entradas não parseáveis
+        raise ValueError(f"Valor inválido para datetime ISO: {x!r}") from e
+
+    # Se vier naive, marque como UTC; se já tiver tz, converta para UTC
+    return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
 
 
 def _first_day_next_month(dt: datetime) -> datetime:
@@ -5712,7 +5698,13 @@ class BuscarPedidosPagosRunnable(QRunnable):
     @pyqtSlot()
     def run(self):
         set_correlation_id(self._parent_correlation_id)
-        logger.info("bairro_lookup_start", extra={"order_id": self.order_id, "cep": self.cep})
+        logger.info(
+            "bairro_lookup_start",
+            extra={
+                "data_inicio": self.data_inicio_str,
+                "fulfillment_status": (self.fulfillment_status or "").strip().lower(),
+            },
+        )
         if self.estado["cancelador_global"].is_set():
             logger.warning("shopify_fetch_cancelled_early")
             return
@@ -6200,9 +6192,7 @@ def iniciar_busca_cpfs(estado, gerenciador, depois=None):
             break
         runnable = ObterCpfShopifyRunnable(pedido_id, estado)
         runnable.signals.resultado.connect(
-            partial(
-                slot_cpf_ok, estado=estado, gerenciador=gerenciador, depois=continuar_para_bairros
-            )
+            partial(slot_cpf_ok, estado=estado, gerenciador=gerenciador)
         )
         pool.start(runnable)
 
@@ -7045,20 +7035,25 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
     iniciar_busca_cpfs(estado, estado.get("gerenciador_progresso"), depois)
 
 
-def slot_cpf_ok(pedido_id, cpf, estado, gerenciador=None):
+def slot_cpf_ok(
+    pedido_id: str,
+    cpf: str,
+    estado: dict,
+    gerenciador: Any | None = None,
+) -> None:
     pedido_id = normalizar_transaction_id(pedido_id)
     estado.setdefault("cpf_pendentes", set())
     estado.setdefault("dados_temp", {}).setdefault("cpfs", {})
 
     if estado.get("cancelador_global", threading.Event()).is_set():
-        logger.warning(f"[🛑] Cancelamento detectado durante slot_cpf_ok → pedido {pedido_id}")
+        logger.warning(f"[INFO] Cancelamento detectado durante slot_cpf_ok → pedido {pedido_id}")
         if gerenciador:
             gerenciador.fechar()
         return
 
     if pedido_id not in estado["cpf_pendentes"]:
         logger.debug(
-            f"[🟡] Pedido {pedido_id} já removido de cpf_pendentes ou não pertence ao conjunto. Ignorando."
+            f"[DBG] Pedido {pedido_id} já removido de cpf_pendentes ou não pertence ao conjunto. Ignorando."
         )
         return
 
@@ -7067,7 +7062,7 @@ def slot_cpf_ok(pedido_id, cpf, estado, gerenciador=None):
 
     total = estado.get("cpf_total_esperado", 0)
     atual = total - len(estado["cpf_pendentes"])
-    logger.info(f"[📌] CPF {atual}/{total} coletado para pedido {pedido_id}")
+    logger.info(f"[OK] CPF {atual}/{total} coletado para pedido {pedido_id}")
 
 
 def slot_bairro_ok(pedido_id, bairro, estado, gerenciador=None, depois=None):
@@ -7771,44 +7766,55 @@ def cotar_fretes_planilha(estado, transportadoras_var, barra_progresso_frete):
 
 
 class VisualizadorPlanilhaDialog(QDialog):
-    def __init__(self, df, estado=None, caminho_log=None):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        estado: MutableMapping[str, Any] | None = None,
+        caminho_log: str | PathLike[str] | None = None,
+    ) -> None:
         super().__init__()
         self.setWindowTitle("📋 Visualizador de Planilha")
         self.setMinimumSize(1000, 600)
-        self.df = df.copy()
-        if "Cupom" not in self.df.columns:
-            self.df["Cupom"] = ""
-        self.estado = estado  # ✅ suporte ao estado
-        self.caminho_log = caminho_log
 
-        layout = QVBoxLayout(self)
+        self.df: pd.DataFrame = df.copy()
+        if "Cupom" not in self.df.columns:
+            # garantir coluna existirá como string
+            self.df["Cupom"] = ""
+
+        self.estado: MutableMapping[str, Any] | None = estado
+        self.caminho_log: str | PathLike[str] | None = caminho_log
+
+        layout: QVBoxLayout = QVBoxLayout(self)
 
         # 🔍 Campo de busca
-        linha_busca = QHBoxLayout()
+        linha_busca: QHBoxLayout = QHBoxLayout()
         linha_busca.addWidget(QLabel("🔎 Buscar:"))
-        self.campo_busca = QLineEdit()
+        self.campo_busca: QLineEdit = QLineEdit()
         linha_busca.addWidget(self.campo_busca)
         layout.addLayout(linha_busca)
         self.campo_busca.textChanged.connect(self.filtrar_tabela)
 
         # 📋 Tabela
-        self.tabela = QTableWidget()
+        self.tabela: QTableWidget = QTableWidget()
         self.tabela.setColumnCount(len(self.df.columns))
         self.tabela.setRowCount(len(self.df))
-        self.tabela.setHorizontalHeaderLabels(self.df.columns.tolist())
+        self.tabela.setHorizontalHeaderLabels(self.df.columns.astype(str).tolist())
         self.tabela.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.tabela.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tabela.setAlternatingRowColors(True)
         self.tabela.setSortingEnabled(True)
 
-        for i in range(len(self.df)):
-            for j, col in enumerate(self.df.columns):
+        # preencher células
+        nlin: int = len(self.df)
+        _ncol: int = len(self.df.columns)
+        for i in range(nlin):
+            for j, col in enumerate(list(self.df.columns)):
                 valor = str(self.df.iloc[i, j])
                 item = QTableWidgetItem(valor)
                 if col in ["Data", "Data Pedido"]:
                     try:
                         dt = datetime.strptime(valor, "%d/%m/%Y").replace(tzinfo=TZ_APP)
-                        item.setData(Qt.UserRole, dt)
+                        item.setData(Qt.UserRole, dt)  # type: ignore[arg-type]
                     except Exception:
                         pass
                 self.tabela.setItem(i, j, item)
@@ -7817,17 +7823,17 @@ class VisualizadorPlanilhaDialog(QDialog):
         layout.addWidget(self.tabela)
 
         # ⌨️ Atalho DELETE para remover linhas com confirmação
-        atalho_delete = QShortcut(QKeySequence(Qt.Key_Delete), self.tabela)
+        atalho_delete: QShortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.tabela)
         atalho_delete.activated.connect(self.remover_linhas_selecionadas)
 
         # 🔘 Botões
-        linha_botoes = QHBoxLayout()
+        linha_botoes: QHBoxLayout = QHBoxLayout()
 
-        btn_remover = QPushButton("🗑️ Remover linha selecionada")
+        btn_remover: QPushButton = QPushButton("🗑️ Remover linha selecionada")
         btn_remover.clicked.connect(self.remover_linhas_selecionadas)
         linha_botoes.addWidget(btn_remover)
 
-        btn_salvar = QPushButton("💾 Salvar alterações")
+        btn_salvar: QPushButton = QPushButton("💾 Salvar alterações")
         btn_salvar.clicked.connect(self.salvar_edicoes)
         linha_botoes.addWidget(btn_salvar)
 
@@ -7835,8 +7841,8 @@ class VisualizadorPlanilhaDialog(QDialog):
 
         self.showMaximized()
 
-    def filtrar_tabela(self):
-        termo = self.campo_busca.text().lower().strip()
+    def filtrar_tabela(self) -> None:
+        termo: str = self.campo_busca.text().lower().strip()
         for row in range(self.tabela.rowCount()):
             mostrar = False
             for col in range(self.tabela.columnCount()):
@@ -7846,12 +7852,14 @@ class VisualizadorPlanilhaDialog(QDialog):
                     break
             self.tabela.setRowHidden(row, not mostrar)
 
-    def remover_linhas_selecionadas(self):
-        linhas = sorted({index.row() for index in self.tabela.selectedIndexes()}, reverse=True)
+    def remover_linhas_selecionadas(self) -> None:
+        # selectedIndexes() -> Sequence[QModelIndex]; convertemos para set de ints
+        idxs: Sequence[QModelIndex] = self.tabela.selectedIndexes()
+        linhas: list[int] = sorted({idx.row() for idx in idxs}, reverse=True)
         if not linhas:
             return
 
-        resposta = QMessageBox.question(
+        resposta: int = QMessageBox.question(
             self,
             "Confirmar remoção",
             f"Deseja realmente remover {len(linhas)} linha(s) selecionada(s)?",
@@ -7862,16 +7870,16 @@ class VisualizadorPlanilhaDialog(QDialog):
             for linha in linhas:
                 self.tabela.removeRow(linha)
 
-    def salvar_edicoes(self):
-        nova_df = []
+    def salvar_edicoes(self) -> None:
+        nova_df_rows: list[list[str]] = []
         for i in range(self.tabela.rowCount()):
-            linha = []
+            linha_vals: list[str] = []
             for j in range(self.tabela.columnCount()):
                 item = self.tabela.item(i, j)
-                linha.append(item.text() if item else "")
-            nova_df.append(linha)
+                linha_vals.append(item.text() if item else "")
+            nova_df_rows.append(linha_vals)
 
-        self.df = pd.DataFrame(nova_df, columns=self.df.columns)
+        self.df = pd.DataFrame(nova_df_rows, columns=self.df.columns)
 
         if self.caminho_log:
             try:
@@ -7975,23 +7983,31 @@ def visualizar_logs_existentes():
 # Processamento e exportação da planilha para o Bling
 
 
-def obter_e_salvar_planilha():
-    df = estado.get("df_planilha_parcial")
+def obter_e_salvar_planilha() -> None:
+    # estado.get() retorna Any -> cast p/ Optional[pd.DataFrame]
+    df: pd.DataFrame | None = cast(pd.DataFrame | None, estado.get("df_planilha_parcial"))
+
     if df is None or df.empty:
         comunicador_global.mostrar_mensagem.emit(
             "erro", "Erro", "Nenhuma planilha parcial carregada."
         )
         return
 
-    caminho, _ = QFileDialog.getSaveFileName(
-        None, "Salvar Planilha", "", "Planilhas Excel (*.xlsx)"
+    # QFileDialog.getSaveFileName -> Tuple[str, str]
+    caminho: str
+    _filtro: str
+    caminho, _filtro = cast(
+        tuple[str, str],
+        QFileDialog.getSaveFileName(None, "Salvar Planilha", "", "Planilhas Excel (*.xlsx)"),
     )
+
     if caminho:
+        # salvar_planilha_final é sua função existente
         salvar_planilha_final(df, caminho)
 
 
-def limpar_planilha():
-    resposta = QMessageBox.question(
+def limpar_planilha() -> None:
+    resposta: int = QMessageBox.question(
         None,
         "Confirmação",
         "Deseja realmente limpar os dados da planilha?",
@@ -8004,17 +8020,28 @@ def limpar_planilha():
         estado["transacoes_obtidas"] = False
 
         if "tabela_widget" in estado and estado["tabela_widget"] is not None:
-            estado["tabela_widget"].setRowCount(0)
+            # deixe claro p/ o mypy que é um QTableWidget
+            tabela = cast(QTableWidget, estado["tabela_widget"])
+            tabela.setRowCount(0)
 
         comunicador_global.mostrar_mensagem.emit("info", "Limpo", "Planilha foi limpa.")
 
 
-def gerar_pdf_resumo_logistica(df, data_envio, bimestre, ano, caminho_planilha):
+def gerar_pdf_resumo_logistica(
+    df: pd.DataFrame,  # tabela de dados
+    data_envio: date | datetime | str,  # aceita date/datetime/str
+    bimestre: int,  # 1..6
+    ano: int,  # ex.: 2025
+    caminho_planilha: str | PathLike[str],  # caminho/Path
+) -> None:
     # 🔁 Agrupa os produtos por Número pedido (pedido final)
-    agrupado = {}
-    for grupo in df.groupby("Número pedido"):
-        produtos = grupo["Produto"].dropna().tolist()
-        produtos = [p.strip() for p in produtos if p.strip()]
+    agrupado: dict[str, int] = {}
+
+    # mypy-friendly: descompacta o groupby
+    for _chave, grupo_df in df.groupby("Número pedido"):
+        # grupo_df: pd.DataFrame
+        produtos = grupo_df["Produto"].dropna().tolist()
+        produtos = [p.strip() for p in produtos if isinstance(p, str) and p.strip()]
         if not produtos:
             continue
         chave = " + ".join(sorted(produtos))
@@ -8022,14 +8049,37 @@ def gerar_pdf_resumo_logistica(df, data_envio, bimestre, ano, caminho_planilha):
         agrupado[chave] += 1
 
     # 📊 Contagem total por produto individual
-    produtos_totais = Counter()
+    produtos_totais: Counter[str] = Counter()
     for conjunto, qtd in agrupado.items():
         for produto in conjunto.split(" + "):
             produtos_totais[produto] += qtd
 
+    # 🔎 Normaliza data_envio para algo com .strftime (sempre datetime aware no TZ_APP)
+    if isinstance(data_envio, str):
+        try:
+            # 1) tenta ISO (com ou sem tz)
+            dt = datetime.fromisoformat(data_envio)
+        except ValueError:
+            try:
+                # 2) tenta parsing flexível (dd/mm/yyyy, etc.) já existente no projeto
+                dt = parse_date(data_envio, dayfirst=True)
+            except Exception:
+                # 3) fallback: agora local (aware)
+                data_envio_dt = local_now()
+            else:
+                data_envio_dt = ensure_aware_local(dt)
+        else:
+            data_envio_dt = ensure_aware_local(dt)
+    elif isinstance(data_envio, date) and not isinstance(data_envio, datetime):
+        # veio só date → transforma em LOCAL-aware 00:00
+        data_envio_dt = aware_local(data_envio.year, data_envio.month, data_envio.day)
+    else:
+        # já é datetime → garante que esteja local-aware
+        data_envio_dt = ensure_aware_local(data_envio)
+
     # 🧾 Caminho do PDF
-    nome_arquivo = f"{data_envio.strftime('%d%m%Y')}_logos_resumo_logistica_{bimestre}_{ano}.pdf"
-    pasta_destino = os.path.dirname(caminho_planilha)
+    nome_arquivo = f"{data_envio_dt.strftime('%d%m%Y')}_logos_resumo_logistica_{bimestre}_{ano}.pdf"
+    pasta_destino = os.path.dirname(os.fspath(caminho_planilha))
     caminho_pdf = os.path.join(pasta_destino, nome_arquivo)
 
     # 🖨️ Criação do PDF
@@ -8041,7 +8091,7 @@ def gerar_pdf_resumo_logistica(df, data_envio, bimestre, ano, caminho_planilha):
     pdf.cell(
         0,
         10,
-        f"Resumo de Produção - {data_envio.strftime('%d/%m/%Y')} - {bimestre}/{ano}",
+        f"Resumo de Produção - {data_envio_dt.strftime('%d/%m/%Y')} - {bimestre}/{ano}",
         ln=True,
         align="C",
     )
@@ -8076,6 +8126,7 @@ def gerar_pdf_resumo_logistica(df, data_envio, bimestre, ano, caminho_planilha):
 
     # 💾 Salva e abre
     pdf.output(caminho_pdf)
+    # os.startfile é específico do Windows; para mypy tudo ok:
     os.startfile(caminho_pdf)
 
 
@@ -8227,35 +8278,35 @@ def chave_assinatura(nome: str, periodicidade: str) -> str:
     return f"{nome.strip()} - {p}"
 
 
-def abrir_editor_skus(box_nome_input=None):
-
+def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
     estado.setdefault("skus_info", {})
-    dialog = QDialog()
+    skus_info: MutableMapping[str, Any] = cast(MutableMapping[str, Any], estado["skus_info"])
+    dialog: QDialog = QDialog()
     dialog.setWindowTitle("Editor de SKUs")
     dialog.setGeometry(100, 100, 1000, 600)
-    layout = QVBoxLayout(dialog)
+    layout: QVBoxLayout = QVBoxLayout(dialog)
 
-    tabs = QTabWidget()
-    tab_produtos = QWidget()
-    tab_assinaturas = QWidget()
-    tab_combos = QWidget()
+    tabs: QTabWidget = QTabWidget()
+    tab_produtos: QWidget = QWidget()
+    tab_assinaturas: QWidget = QWidget()
+    tab_combos: QWidget = QWidget()
 
     # 📦 Produtos
-    tabela_prod = QTableWidget()
+    tabela_prod: QTableWidget = QTableWidget()
     tabela_prod.setColumnCount(7)
     tabela_prod.setHorizontalHeaderLabels(
         ["Nome", "SKU", "Peso", "Guru IDs", "Shopify IDs", "Preço Fallback", "Indisp."]
     )
 
     # 📬 Assinaturas
-    tabela_assin = QTableWidget()
+    tabela_assin: QTableWidget = QTableWidget()
     tabela_assin.setColumnCount(6)
     tabela_assin.setHorizontalHeaderLabels(
         ["Nome", "Duração", "Periodicidade", "Guru IDs", "Preço Fallback", "Indisp."]
     )
 
     # 📚 Combos
-    tabela_combo = QTableWidget()
+    tabela_combo: QTableWidget = QTableWidget()
     tabela_combo.setColumnCount(6)
     tabela_combo.setHorizontalHeaderLabels(
         ["Nome", "Composto de", "Guru IDs", "Shopify IDs", "Preço Fallback", "Indisp."]
@@ -8264,15 +8315,15 @@ def abrir_editor_skus(box_nome_input=None):
     for tabela in [tabela_prod, tabela_assin, tabela_combo]:
         tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
-    layout_prod = QVBoxLayout(tab_produtos)
+    layout_prod: QVBoxLayout = QVBoxLayout(tab_produtos)
     layout_prod.addWidget(tabela_prod)
-    layout_assin = QVBoxLayout(tab_assinaturas)
+    layout_assin: QVBoxLayout = QVBoxLayout(tab_assinaturas)
     layout_assin.addWidget(tabela_assin)
-    layout_combo = QVBoxLayout(tab_combos)
+    layout_combo: QVBoxLayout = QVBoxLayout(tab_combos)
     layout_combo.addWidget(tabela_combo)
 
-    def _mk_checkbox(checked=False):
-        cb = QCheckBox()
+    def _mk_checkbox(checked: bool = False) -> QCheckBox:
+        cb: QCheckBox = QCheckBox()
         cb.setChecked(bool(checked))
         cb.setStyleSheet("margin-left: 8px;")  # só pra ficar bonitinho
         return cb
@@ -8282,69 +8333,69 @@ def abrir_editor_skus(box_nome_input=None):
         return bool(w.isChecked()) if isinstance(w, QCheckBox) else False
 
     # Funções para adicionar nova linha
-    def adicionar_produto():
-        row = tabela_prod.rowCount()
+    def adicionar_produto() -> None:
+        row: int = tabela_prod.rowCount()
         tabela_prod.insertRow(row)
         for col in range(6):
             tabela_prod.setItem(row, col, QTableWidgetItem(""))
         # coluna 6 = Indisp. (checkbox)
         tabela_prod.setCellWidget(row, 6, _mk_checkbox(False))
 
-    def adicionar_assinatura():
-        row = tabela_assin.rowCount()
+    def adicionar_assinatura() -> None:
+        row: int = tabela_assin.rowCount()
         tabela_assin.insertRow(row)
         for col in range(5):  # até Preço Fallback
             tabela_assin.setItem(row, col, QTableWidgetItem(""))
         tabela_assin.setCellWidget(row, 5, _mk_checkbox(False))  # Indisp.
 
-    def adicionar_combo():
-        row = tabela_combo.rowCount()
+    def adicionar_combo() -> None:
+        row: int = tabela_combo.rowCount()
         tabela_combo.insertRow(row)
         for col in range(5):
             tabela_combo.setItem(row, col, QTableWidgetItem(""))
         tabela_combo.setCellWidget(row, 5, _mk_checkbox(False))  # Indisp.
 
     # 🧹 Funções para remover linha selecionada
-    def remover_produto():
-        row = tabela_prod.currentRow()
+    def remover_produto() -> None:
+        row: int = tabela_prod.currentRow()
         if row >= 0:
             tabela_prod.removeRow(row)
 
-    def remover_assinatura():
-        row = tabela_assin.currentRow()
+    def remover_assinatura() -> None:
+        row: int = tabela_assin.currentRow()
         if row >= 0:
             tabela_assin.removeRow(row)
 
-    def remover_combo():
-        row = tabela_combo.currentRow()
+    def remover_combo() -> None:
+        row: int = tabela_combo.currentRow()
         if row >= 0:
             tabela_combo.removeRow(row)
 
     # 📦 Botões Produtos
-    layout_botoes_prod = QHBoxLayout()
-    btn_novo_prod = QPushButton("+ Novo Produto")
+    layout_botoes_prod: QHBoxLayout = QHBoxLayout()
+    btn_novo_prod: QPushButton = QPushButton("+ Novo Produto")
     btn_novo_prod.clicked.connect(adicionar_produto)
-    btn_remover_prod = QPushButton("🗑️ Remover Selecionado")
+    btn_remover_prod: QPushButton = QPushButton("🗑️ Remover Selecionado")
     btn_remover_prod.clicked.connect(remover_produto)
     layout_botoes_prod.addWidget(btn_novo_prod)
     layout_botoes_prod.addWidget(btn_remover_prod)
     layout_prod.addLayout(layout_botoes_prod)
 
     # 📬 Botões Assinaturas
-    layout_botoes_assin = QHBoxLayout()
-    btn_nova_assin = QPushButton("+ Nova Assinatura")
+    layout_botoes_assin: QHBoxLayout = QHBoxLayout()
+    btn_nova_assin: QPushButton = QPushButton("+ Nova Assinatura")
     btn_nova_assin.clicked.connect(adicionar_assinatura)
-    btn_remover_assin = QPushButton("🗑️ Remover Selecionado")
+    btn_remover_assin: QPushButton = QPushButton("🗑️ Remover Selecionado")
     btn_remover_assin.clicked.connect(remover_assinatura)
     layout_botoes_assin.addWidget(btn_nova_assin)
     layout_botoes_assin.addWidget(btn_remover_assin)
     layout_assin.addLayout(layout_botoes_assin)
 
     # 📚 Botões Combos
-    layout_botoes_combo = QHBoxLayout()
-    btn_novo_combo = QPushButton("+ Novo Combo")
+    layout_botoes_combo: QHBoxLayout = QHBoxLayout()
+    btn_novo_combo: QPushButton = QPushButton("+ Novo Combo")
     btn_novo_combo.clicked.connect(adicionar_combo)
-    btn_remover_combo = QPushButton("🗑️ Remover Selecionado")
+    btn_remover_combo: QPushButton = QPushButton("🗑️ Remover Selecionado")
     btn_remover_combo.clicked.connect(remover_combo)
     layout_botoes_combo.addWidget(btn_novo_combo)
     layout_botoes_combo.addWidget(btn_remover_combo)
@@ -8355,13 +8406,13 @@ def abrir_editor_skus(box_nome_input=None):
     tabs.addTab(tab_combos, "📚 Combos")
     layout.addWidget(tabs)
 
-    def carregar_skus():
+    def carregar_skus() -> dict[str, Any]:
         if os.path.exists(skus_path):
             with open(skus_path, encoding="utf-8") as f:
-                return json.load(f)
+                return cast(dict[str, Any], json.load(f))
         return {}
 
-    def preencher_tabelas(skus_dict):
+    def preencher_tabelas(skus_dict: dict[str, Any]) -> None:
         tabela_prod.setRowCount(0)
         tabela_assin.setRowCount(0)
         tabela_combo.setRowCount(0)
@@ -8372,8 +8423,8 @@ def abrir_editor_skus(box_nome_input=None):
                 row = tabela_assin.rowCount()
                 tabela_assin.insertRow(row)
 
-                nome_base = nome.split(" - ")[0]
-                periodicidade = info.get("periodicidade") or (
+                nome_base: str = nome.split(" - ")[0]
+                periodicidade: str = info.get("periodicidade") or (
                     nome.split(" - ")[1] if " - " in nome else ""
                 )
 
@@ -8422,25 +8473,25 @@ def abrir_editor_skus(box_nome_input=None):
                     row, 6, _mk_checkbox(bool(info.get("indisponivel", False)))
                 )
 
-    def salvar_tabelas():
-        skus = {}
+    def salvar_tabelas() -> None:
+        skus: dict[str, Any] = {}
 
         for row in range(tabela_prod.rowCount()):
 
-            def get(col, _row=row):
+            def get(col: int, _row: int = row) -> str:
                 item = tabela_prod.item(_row, col)
                 return item.text().strip() if item else ""
 
-            nome, sku, peso, guru, shopify, preco = map(get, range(6))
+            nome, sku, peso_str, guru, shopify, preco_str = map(get, range(6))
 
             if not nome:
                 continue
             try:
-                peso = float(peso)
+                peso: float = float(peso_str)
             except (ValueError, TypeError):
                 peso = 0.0
             try:
-                preco = float(preco) if preco else None
+                preco: float | None = float(preco_str) if preco_str else None
             except (ValueError, TypeError):
                 preco = None
             skus[nome] = {
@@ -8457,23 +8508,23 @@ def abrir_editor_skus(box_nome_input=None):
 
         for row in range(tabela_assin.rowCount()):
 
-            def get(col, _row=row):
+            def get(col: int, _row: int = row) -> str:
                 item = tabela_assin.item(_row, col)
                 return item.text().strip() if item else ""
 
-            nome_base, recorrencia, periodicidade, guru, preco = map(get, range(5))
+            nome_base, recorrencia, periodicidade, guru, preco_str = map(get, range(5))
 
             if not nome_base:
                 continue
 
-            key = chave_assinatura(nome_base, periodicidade)  # como você já faz
+            key: str = chave_assinatura(nome_base, periodicidade)  # como você já faz
 
             try:
-                preco = float(preco) if preco else None
+                preco_a: float | None = float(preco_str) if preco_str else None
             except (ValueError, TypeError):
-                preco = None
+                preco_a = None
 
-            guru_ids = [x.strip() for x in guru.split(",") if x.strip()]
+            guru_ids: list[str] = [x.strip() for x in guru.split(",") if x.strip()]
 
             skus[key] = {
                 "tipo": "assinatura",
@@ -8486,22 +8537,22 @@ def abrir_editor_skus(box_nome_input=None):
                 "peso": 0.0,
                 "indisponivel": _get_checkbox(tabela_assin, row, 5),  # << AQUI
             }
-            if preco is not None:
-                skus[key]["preco_fallback"] = preco
+            if preco_a is not None:
+                skus[key]["preco_fallback"] = preco_a
 
         for row in range(tabela_combo.rowCount()):
 
-            def get(col, _row=row):
+            def get(col: int, _row: int = row) -> str:
                 item = tabela_combo.item(_row, col)
                 return item.text().strip() if item else ""
 
-            nome, composto, guru, shopify, preco = map(get, range(5))
+            nome, composto, guru, shopify, preco_str = map(get, range(5))
             if not nome:
                 continue
             try:
-                preco = float(preco) if preco else None
+                preco_c: float | None = float(preco_str) if preco_str else None
             except (ValueError, TypeError):
-                preco = None
+                preco_c = None
             skus[nome] = {
                 "sku": "",
                 "peso": 0.0,
@@ -8511,14 +8562,14 @@ def abrir_editor_skus(box_nome_input=None):
                 "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
                 "indisponivel": _get_checkbox(tabela_combo, row, 5),  # << AQUI
             }
-            if preco is not None:
-                skus[nome]["preco_fallback"] = preco
+            if preco_c is not None:
+                skus[nome]["preco_fallback"] = preco_c
 
         with open(skus_path, "w", encoding="utf-8") as f:
             json.dump(skus, f, indent=4, ensure_ascii=False)
 
-        estado["skus_info"].clear()
-        estado["skus_info"].update(skus)
+        skus_info.clear()
+        skus_info.update(skus)
 
         if box_nome_input:
             box_nome_input.clear()
@@ -8527,14 +8578,13 @@ def abrir_editor_skus(box_nome_input=None):
         QMessageBox.information(dialog, "Sucesso", "SKUs salvos com sucesso!")
 
     # Botão salvar
-    botoes = QHBoxLayout()
-    btn_salvar = QPushButton("💾 Salvar SKUs")
+    botoes: QHBoxLayout = QHBoxLayout()
+    btn_salvar: QPushButton = QPushButton("💾 Salvar SKUs")
     btn_salvar.clicked.connect(salvar_tabelas)
     botoes.addWidget(btn_salvar)
     layout.addLayout(botoes)
 
-    skus_dict = carregar_skus()
-    print(f"[DEBUG] carregando {len(skus_dict)} produtos no editor")
+    skus_dict: dict[str, Any] = carregar_skus()
     preencher_tabelas(skus_dict)
     dialog.exec_()
 
@@ -8542,14 +8592,15 @@ def abrir_editor_skus(box_nome_input=None):
 # Montar PDF de auxílio com XMLs
 
 
-def extrair_nfs_do_zip(caminho_zip, pasta_destino="/tmp/xmls_extraidos"):
+def extrair_nfs_do_zip(caminho_zip: str, pasta_destino: str = "/tmp/xmls_extraidos") -> list[str]:
+    """Extrai arquivos .xml de um ZIP para a pasta destino e retorna os caminhos extraídos."""
     # Limpa a pasta antes de extrair
     if os.path.exists(pasta_destino):
         shutil.rmtree(pasta_destino)
     os.makedirs(pasta_destino)
 
     with zipfile.ZipFile(caminho_zip, "r") as zip_ref:
-        nomes_extraidos = [
+        nomes_extraidos: list[str] = [
             zip_ref.extract(nome, path=pasta_destino)
             for nome in zip_ref.namelist()
             if nome.endswith(".xml")
@@ -8557,25 +8608,33 @@ def extrair_nfs_do_zip(caminho_zip, pasta_destino="/tmp/xmls_extraidos"):
     return nomes_extraidos
 
 
-def ler_dados_nf(caminho_xml):
+def ler_dados_nf(
+    caminho_xml: str,
+) -> tuple[str | None, str | None, str | None, list[str]]:
+    """
+    Lê dados essenciais de uma NF-e em XML.
+    Retorna: (nNF, xNome, transportadora, produtos)
+    """
     try:
         tree = ET.parse(caminho_xml)
         root = tree.getroot()
         ns = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
         infNFe = root.find(".//nfe:infNFe", ns)
 
-        nNF = infNFe.findtext("nfe:ide/nfe:nNF", namespaces=ns)
-        xNome = infNFe.findtext("nfe:dest/nfe:xNome", namespaces=ns)
-        xNomeTransportadora = (
+        nNF: str | None = infNFe.findtext("nfe:ide/nfe:nNF", namespaces=ns) if infNFe else None
+        xNome: str | None = infNFe.findtext("nfe:dest/nfe:xNome", namespaces=ns) if infNFe else None
+        xNomeTransportadora: str | None = (
             infNFe.findtext("nfe:transp/nfe:transporta/nfe:xNome", namespaces=ns)
-            or "Sem Transportadora"
-        )
+            if infNFe
+            else None
+        ) or "Sem Transportadora"
 
-        produtos = []
-        for det in infNFe.findall("nfe:det", ns):
-            xProd = det.findtext("nfe:prod/nfe:xProd", namespaces=ns)
-            if xProd:
-                produtos.append(xProd.strip())
+        produtos: list[str] = []
+        if infNFe is not None:
+            for det in infNFe.findall("nfe:det", ns):
+                xProd = det.findtext("nfe:prod/nfe:xProd", namespaces=ns)
+                if xProd:
+                    produtos.append(xProd.strip())
 
         return nNF, xNome, xNomeTransportadora, produtos
 
@@ -8584,26 +8643,40 @@ def ler_dados_nf(caminho_xml):
         return None, None, None, []
 
 
-def agrupar_por_transportadora(lista_xml):
-    # Estrutura: {Transportadora: {nNF: {"xNome": ..., "produtos": [...]}}}
-    agrupado = defaultdict(lambda: defaultdict(lambda: {"xNome": "", "produtos": []}))
+def agrupar_por_transportadora(
+    lista_xml: Sequence[str],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """
+    { transportadora: { nNF: {"xNome": str, "produtos": list[str]} } }
+    """
+    agrupado: dict[str, dict[str, dict[str, Any]]] = defaultdict(
+        lambda: defaultdict(lambda: {"xNome": "", "produtos": []})
+    )
 
     for caminho in lista_xml:
-        nNF, xNome, transportadora, produtos = ler_dados_nf(caminho)
-        if not nNF:
+        nNF, xNome, transportadora, produtos = ler_dados_nf(
+            caminho
+        )  # nNF/transportadora podem ser None
+        # garanta chaves válidas:
+        if not nNF or not transportadora:
             continue
 
-        agrupado[transportadora][nNF]["xNome"] = xNome
+        nome_dest = xNome or ""  # xNome pode ser None -> converte para str
+        produtos = produtos or []  # segurança (já é list[str], mas evita None acidental)
+
+        agrupado[transportadora][nNF]["xNome"] = nome_dest
         agrupado[transportadora][nNF]["produtos"].extend(produtos)
 
     return agrupado
 
 
-def agrupar_por_nf(lista_xml):
-    agrupado = defaultdict(lambda: {"xNome": "", "produtos": []})
+def agrupar_por_nf(
+    lista_xml: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    agrupado: dict[str, dict[str, Any]] = defaultdict(lambda: {"xNome": "", "produtos": []})
     for caminho in lista_xml:
-        # ANTES: nNF, xNome, produtos = ler_dados_nf(caminho_xml)
-        nNF, xNome, _transportadora, produtos = ler_dados_nf(caminho)  # <- corrige aqui
+        # nNF: str, xNome: str, _transportadora: str, produtos: list[str]
+        nNF, xNome, _transportadora, produtos = ler_dados_nf(caminho)
         if not nNF:
             continue
         agrupado[nNF]["xNome"] = xNome
@@ -8612,10 +8685,11 @@ def agrupar_por_nf(lista_xml):
 
 
 def gerar_pdfs_por_transportadora(
-    dados_por_transportadora, pasta_destino="/tmp/pdfs_por_transportadora"
-):
+    dados_por_transportadora: Mapping[str, Mapping[str, dict[str, Any]]],
+    pasta_destino: str = "/tmp/pdfs_por_transportadora",
+) -> list[str]:
     os.makedirs(pasta_destino, exist_ok=True)
-    caminhos = []
+    caminhos: list[str] = []
 
     for transportadora, notas in dados_por_transportadora.items():
         # Sanitizar nome para nome de arquivo
@@ -8623,7 +8697,7 @@ def gerar_pdfs_por_transportadora(
         caminho_pdf = os.path.join(pasta_destino, nome_arquivo)
 
         c = canvas.Canvas(caminho_pdf, pagesize=A4)
-        altura = A4
+        _largura, altura = A4
         margem_sup = 10 * mm
         margem_inf = 10 * mm
         y = altura - margem_sup
@@ -8650,13 +8724,15 @@ def gerar_pdfs_por_transportadora(
         c.save()
         caminhos.append(caminho_pdf)
 
-    return caminhos  # lista com caminhos dos PDFs gerados
+    return caminhos
 
 
-def gerar_pdf_resumo_nf(dados_agrupados, caminho_pdf="/tmp/resumo_nfes.pdf"):
-
+def gerar_pdf_resumo_nf(
+    dados_agrupados: Mapping[str, Mapping[str, Any]],
+    caminho_pdf: str = "/tmp/resumo_nfes.pdf",
+) -> str:
     c = canvas.Canvas(caminho_pdf, pagesize=A4)
-    altura = A4
+    _largura, altura = A4
 
     margem_sup = 10 * mm
     margem_inf = 10 * mm
@@ -8685,29 +8761,41 @@ def gerar_pdf_resumo_nf(dados_agrupados, caminho_pdf="/tmp/resumo_nfes.pdf"):
     return caminho_pdf
 
 
-def processar_xmls_nfe(estado):
+def processar_xmls_nfe(estado: MutableMapping[str, Any]) -> None:
     try:
-        caminho_zip, _ = QFileDialog.getOpenFileName(
+        # QFileDialog.getOpenFileName -> tuple[str, str]
+        caminho_zip_tuple: tuple[str, str] = QFileDialog.getOpenFileName(
             None, "Selecionar Arquivo ZIP", "", "ZIP Files (*.zip)"
         )
+        caminho_zip: str = caminho_zip_tuple[0]
         if not caminho_zip:
             return
 
-        lista_xmls = extrair_nfs_do_zip(caminho_zip)
-        dados_agrupados = agrupar_por_transportadora(lista_xmls)
-        estado["dados_agrupados_nfe"] = dados_agrupados
+        # Se suas funções já têm tipos melhores, troque Sequence/Mapping por eles
+        lista_xmls: Sequence[str] = cast(Sequence[str], extrair_nfs_do_zip(caminho_zip))
 
-        pasta_pdf = QFileDialog.getExistingDirectory(None, "Selecionar pasta para salvar os PDFs")
+        dados_agrupados: Mapping[str, Any] = cast(
+            Mapping[str, Any], agrupar_por_transportadora(lista_xmls)
+        )
+        # Se você pretende mutar depois em outro lugar, materializa como dict
+        estado["dados_agrupados_nfe"] = dict(dados_agrupados)
+
+        # QFileDialog.getExistingDirectory -> str
+        pasta_pdf: str = cast(
+            str, QFileDialog.getExistingDirectory(None, "Selecionar pasta para salvar os PDFs")
+        )
         if not pasta_pdf:
             return
 
-        pdfs_gerados = gerar_pdfs_por_transportadora(dados_agrupados, pasta_pdf)
+        pdfs_gerados: Sequence[str] = cast(
+            Sequence[str], gerar_pdfs_por_transportadora(dados_agrupados, pasta_pdf)
+        )
 
         if not pdfs_gerados:
             QMessageBox.information(None, "Aviso", "Nenhum PDF foi gerado.")
             return
 
-        # Tenta abrir a pasta de destino
+        # Tenta abrir a pasta de destino (sem quebrar se falhar)
         try:
             if platform.system() == "Darwin":
                 subprocess.run(["open", pasta_pdf], check=False)
@@ -8727,7 +8815,11 @@ def processar_xmls_nfe(estado):
 # Design da interface
 
 
-def estilizar_grupo(grupo: QGroupBox, cor_fundo="#f9f9f9", cor_borda="#ccc"):
+def estilizar_grupo(
+    grupo: QGroupBox,
+    cor_fundo: str = "#f9f9f9",
+    cor_borda: str = "#ccc",
+) -> None:
     grupo.setStyleSheet(
         f"""
         QGroupBox {{
@@ -8744,12 +8836,15 @@ def estilizar_grupo(grupo: QGroupBox, cor_fundo="#f9f9f9", cor_borda="#ccc"):
             font-weight: bold;
             background-color: transparent;
         }}
-    """
+        """
     )
 
 
-def criar_grupo_guru(estado, skus_info, transportadoras_var):
-
+def criar_grupo_guru(
+    estado: MutableMapping[str, Any],
+    skus_info: Mapping[str, MutableMapping[str, Any]],
+    transportadoras_var: Any,
+) -> QGroupBox:
     group = QGroupBox("Digital Manager Guru")
     group.setObjectName("grupo_guru")
     group.setAttribute(Qt.WA_StyledBackground, True)
@@ -8822,10 +8917,10 @@ def criar_grupo_guru(estado, skus_info, transportadoras_var):
     btn_rules.clicked.connect(lambda: abrir_mapeador_regras(estado, skus_info))
     linha_config.addWidget(btn_rules)
 
-    def recarregar_regras():
+    def recarregar_regras() -> None:
         try:
             config_path = os.path.join(os.path.dirname(__file__), "config_ofertas.json")
-            regras = []
+            regras: list[dict[str, Any]] = []
             if os.path.exists(config_path):
                 with open(config_path, encoding="utf-8") as f:
                     cfg = json.load(f)
@@ -8883,7 +8978,10 @@ def criar_grupo_guru(estado, skus_info, transportadoras_var):
     return group
 
 
-def criar_grupo_shopify(estado, skus_info):
+def criar_grupo_shopify(
+    estado: MutableMapping[str, Any],
+    skus_info: Mapping[str, MutableMapping[str, Any]],
+) -> QGroupBox:
     group = QGroupBox("🛒 Shopify")
     group.setObjectName("grupo_shopify")
     group.setAttribute(Qt.WA_StyledBackground, True)
@@ -8958,7 +9056,10 @@ def criar_grupo_shopify(estado, skus_info):
     return group
 
 
-def criar_grupo_fretes(estado, transportadoras_var):
+def criar_grupo_fretes(
+    estado: MutableMapping[str, Any],
+    transportadoras_var: Any,
+) -> QGroupBox:
     group = QGroupBox("🚚 Cotação de Fretes")
     group.setObjectName("grupo_fretes")
     group.setAttribute(Qt.WA_StyledBackground, True)
@@ -8992,7 +9093,7 @@ def criar_grupo_fretes(estado, transportadoras_var):
     return group
 
 
-def criar_grupo_exportacao(estado):
+def criar_grupo_exportacao(estado: MutableMapping[str, Any]) -> QGroupBox:
     group = QGroupBox("📋 Controle e Registro")
     group.setObjectName("grupo_exportacao")
     group.setAttribute(Qt.WA_StyledBackground, True)
@@ -9068,7 +9169,10 @@ def criar_grupo_exportacao(estado):
     return group
 
 
-def criar_tab_config(estado, skus_info):
+def criar_tab_config(
+    estado: MutableMapping[str, Any],
+    skus_info: Mapping[str, MutableMapping[str, Any]],
+) -> QWidget:
     tab = QWidget()
     layout = QVBoxLayout(tab)
 
@@ -9088,7 +9192,7 @@ def criar_tab_config(estado, skus_info):
 
     btn_mapear_guru = QPushButton("🔗 Mapear produtos do Guru")
     btn_mapear_guru.clicked.connect(
-        lambda: (abrir_dialogo_mapeamento_guru(skus_info, buscar_todos_produtos_guru(), skus_path))
+        lambda: abrir_dialogo_mapeamento_guru(skus_info, buscar_todos_produtos_guru(), skus_path)
     )
     linha_mapeamento.addWidget(btn_mapear_guru)
 
@@ -9104,14 +9208,16 @@ def criar_tab_config(estado, skus_info):
     return tab
 
 
-def abrir_interface(estado, skus_info):
-
+def abrir_interface(
+    estado: MutableMapping[str, Any],
+    skus_info: MutableMapping[str, MutableMapping[str, Any]],
+) -> None:
     for info in skus_info.values():
         info.setdefault("indisponivel", False)
     estado["skus_info"] = skus_info
 
     app = QApplication.instance()
-    if app is None:
+    if not isinstance(app, QApplication):
         app = QApplication([])
 
     app.setStyleSheet(
@@ -9132,7 +9238,7 @@ def abrir_interface(estado, skus_info):
     )
 
     janela = QWidget()
-    janela.setWindowTitle("Editora Logos: Guru -> Planilha Bling")
+    janela.setWindowTitle("Editora Logos: Sistema de Logística v1")
     largura = 800
     altura = 700
     tela = QDesktopWidget().availableGeometry().center()
@@ -9172,6 +9278,66 @@ def abrir_interface(estado, skus_info):
 
     janela.show()
     app.exec_()
+
+
+@safe_cli
+def main(argv: list[str] | None = None) -> int:
+    """
+    Entry point F-I-N-O com tratamento de erros padronizado pelo cli_safe.
+    - Modo padrão: GUI
+    - Modo CLI: valida entrada e executa orquestração (quando existir)
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="lg-logistica",
+        description="Aplicação de logística (GUI por padrão; CLI opcional).",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["gui", "cli"],
+        default="gui",
+        help="Modo de execução: gui (padrão) ou cli.",
+    )
+    parser.add_argument(
+        "--config",
+        help="(CLI) JSON inline ou caminho para arquivo .json com a configuração.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Mostra detalhes de erro (equivalente a DEBUG=1).",
+    )
+
+    args = parser.parse_args(argv)
+
+    # inicia logging e correlation id
+    setup_logging(
+        level=logging.INFO, json_console=True, file_path=os.path.join(caminho_base(), "sistema.log")
+    )
+    set_correlation_id()
+
+    if args.mode == "gui":
+        return run_gui()
+
+    # --- CLI ---
+    if not args.config:
+        raise UserError(
+            "Uso (CLI): --mode cli --config '<json>' | --config caminho/para/config.json",
+            code="USAGE",
+        )
+
+    payload = _load_payload_from_arg(args.config)
+    cfg = validate_config(payload)
+    ensure_paths(cfg)
+
+    # caso você já tenha um orquestrador (vamos criar no Passo 3/4):
+    # from app.runner import run_from_cfg
+    # return int(run_from_cfg(cfg) or 0)
+
+    # provisório: confirme a entrada válida e retorne sucesso
+    print(f"OK (CLI): {cfg.input_path} -> {cfg.output_dir} (dry_run={cfg.dry_run})")
+    return 0
 
 
 if __name__ == "__main__":
