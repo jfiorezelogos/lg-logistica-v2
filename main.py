@@ -19,13 +19,14 @@ import zipfile
 from calendar import monthrange
 from collections import Counter, OrderedDict, defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from functools import partial
 from json import JSONDecodeError
 from threading import Event
 from typing import Any, TypedDict, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import certifi
 import openai
@@ -293,6 +294,56 @@ else:
     }
     with open(skus_path, "w", encoding="utf-8") as f:
         json.dump(skus_info, f, indent=4, ensure_ascii=False)
+
+# Helpers datetime
+TZ_APP = ZoneInfo("America/Sao_Paulo")
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def local_now() -> datetime:
+    return datetime.now(TZ_APP)
+
+
+def aware_local(y: int, m: int, d: int, hh=0, mm=0, ss=0, us=0) -> datetime:
+    return datetime(y, m, d, hh, mm, ss, us, tzinfo=TZ_APP)
+
+
+def aware_utc(y: int, m: int, d: int, hh=0, mm=0, ss=0, us=0) -> datetime:
+    return datetime(y, m, d, hh, mm, ss, us, tzinfo=UTC)
+
+
+def from_ts_utc(ts: float) -> datetime:
+    if ts > 1e12:  # ms -> s
+        ts /= 1000.0
+    return datetime.fromtimestamp(ts, tz=UTC)
+
+
+def ensure_aware_local(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=TZ_APP)
+
+
+def ensure_aware_utc(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+
+# Serializações para endpoints (NÃO muda nomes dos parâmetros!)
+def to_rfc3339_z(dt: datetime) -> str:
+    """yyyy-mm-ddTHH:MM:SSZ (UTC)"""
+    return ensure_aware_utc(dt).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def to_date_yyyy_mm_dd(dt: datetime) -> str:
+    """yyyy-mm-dd (sem tz), quando o endpoint espera só data."""
+    return ensure_aware_local(dt).date().isoformat()
+
+
+def to_br_date(ddmmyyyy_dt: datetime) -> str:
+    """dd/mm/yyyy para UI/relatórios."""
+    return ensure_aware_local(ddmmyyyy_dt).strftime("%d/%m/%Y")
+
 
 # Mapear produtos do Guru
 
@@ -1262,16 +1313,15 @@ ASSINATURAS_TRIANUAIS = ASSINATURAS.get("trianual", [])
 # API SHOPIFY
 
 
-def obter_api_shopify_version():
-    hoje = datetime.today()
-    if hoje.month <= 3:
-        return f"{hoje.year}-01"
-    elif hoje.month <= 6:
-        return f"{hoje.year}-04"
-    elif hoje.month <= 9:
-        return f"{hoje.year}-07"
-    else:
-        return f"{hoje.year}-10"
+def obter_api_shopify_version(now: datetime | None = None) -> str:
+    """
+    Retorna a versão trimestral da Shopify API (YYYY-01/04/07/10).
+    Usa datetime aware (UTC por padrão). 'now' é opcional (útil para testes).
+    """
+    dt = now or datetime.now(UTC)
+    y, m = dt.year, dt.month
+    q_start = ((m - 1) // 3) * 3 + 1  # 1, 4, 7, 10
+    return f"{y}-{q_start:02d}"
 
 
 API_VERSION = obter_api_shopify_version()
@@ -1656,35 +1706,48 @@ class WorkerThread(QThread):
 
 
 def dividir_busca_em_periodos(data_inicio, data_fim):
+    """
+    Divide o intervalo em blocos com fins em abr/ago/dez.
+    Retorna lista de tuplas (YYYY-MM-DD, YYYY-MM-DD).
+    Internamente usa datetime aware (UTC) para evitar DTZ.
+    """
     blocos = []
-    atual = (
-        data_inicio
-        if isinstance(data_inicio, datetime)
-        else datetime.combine(data_inicio, datetime.min.time())
-    )
-    data_fim = (
-        data_fim
-        if isinstance(data_fim, datetime)
-        else datetime.combine(data_fim, datetime.max.time())
-    )
 
-    while atual <= data_fim:
-        mes = atual.month
+    # Normaliza início/fim para datetime AWARE (UTC)
+    if isinstance(data_inicio, datetime):
+        ini = data_inicio if data_inicio.tzinfo else data_inicio.replace(tzinfo=UTC)
+    else:
+        ini = datetime.combine(data_inicio, datetime.min.time(), tzinfo=UTC)
+
+    if isinstance(data_fim, datetime):
+        end = data_fim if data_fim.tzinfo else data_fim.replace(tzinfo=UTC)
+    else:
+        end = datetime.combine(data_fim, datetime.max.time(), tzinfo=UTC)
+
+    atual = ini
+
+    while atual <= end:
         ano = atual.year
+        mes = atual.month
 
-        if mes in [1, 2, 3, 4]:
+        # Blocos: jan-abr, mai-ago, set-dez
+        if mes <= 4:
             fim_mes = 4
-        elif mes in [5, 6, 7, 8]:
+        elif mes <= 8:
             fim_mes = 8
         else:
             fim_mes = 12
 
         ultimo_dia = monthrange(ano, fim_mes)[1]
-        fim_bloco = datetime(ano, fim_mes, ultimo_dia)
+        # Fim do bloco no último dia do fim_mes (23:59:59) como aware UTC
+        fim_bloco = datetime(ano, fim_mes, ultimo_dia, 23, 59, 59, tzinfo=UTC)
 
-        fim_bloco = min(fim_bloco, data_fim)
+        # Clip no limite superior
+        if fim_bloco > end:
+            fim_bloco = end
 
-        blocos.append((atual.strftime("%Y-%m-%d"), fim_bloco.strftime("%Y-%m-%d")))
+        # Mantém contrato: strings YYYY-MM-DD
+        blocos.append((atual.date().isoformat(), fim_bloco.date().isoformat()))
 
         # Avança para o primeiro dia do próximo bloco
         proximo_mes = fim_mes + 1
@@ -1693,7 +1756,7 @@ def dividir_busca_em_periodos(data_inicio, data_fim):
             proximo_mes = 1
             proximo_ano += 1
 
-        atual = datetime(proximo_ano, proximo_mes, 1)
+        atual = datetime(proximo_ano, proximo_mes, 1, tzinfo=UTC)
 
     return blocos
 
@@ -1739,24 +1802,24 @@ def requisicao_com_retry(
 
 
 def iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estado):
-
     dialog = QDialog()
     dialog.setWindowTitle("🔍 Buscar Produtos Aprovados")
     layout = QVBoxLayout(dialog)
 
     def obter_periodo_bimestre_atual():
-        hoje = datetime.today()
-        mes = hoje.month
-        ano = hoje.year
+        hoje = QDate.currentDate()
+        mes = hoje.month()
+        ano = hoje.year()
+
         bimestre = (mes - 1) // 2
-        primeiro_mes = 1 + bimestre * 2
+        primeiro_mes = 1 + bimestre * 2  # 1, 3, 5, 7, 9, 11
 
         data_ini = QDate(ano, primeiro_mes, 1)
 
         if primeiro_mes + 2 > 12:
-            data_fim = QDate(ano + 1, 1, 1).addDays(-1)
+            data_fim = QDate(ano + 1, 1, 1).addDays(-1)  # até 31/12
         else:
-            data_fim = QDate(ano, primeiro_mes + 2, 1).addDays(-1)
+            data_fim = QDate(ano, primeiro_mes + 2, 1).addDays(-1)  # último dia do 2º mês
 
         return data_ini, data_fim
 
@@ -1980,19 +2043,21 @@ def bimestre_do_mes(mes: int) -> int:
 
 def bounds_do_periodo(ano: int, mes: int, periodicidade: str):
     periodicidade = (periodicidade or "").strip().lower()
+
     if periodicidade == "mensal":
-        dt_ini = datetime(ano, mes, 1, 0, 0, 0)
+        dt_ini = datetime(ano, mes, 1, 0, 0, 0, tzinfo=UTC)
         last_day = calendar.monthrange(ano, mes)[1]
-        dt_end = datetime(ano, mes, last_day, 23, 59, 59)
+        dt_end = datetime(ano, mes, last_day, 23, 59, 59, tzinfo=UTC)
         periodo = mes
     else:  # bimestral
         bim = bimestre_do_mes(mes)
         m1 = 1 + (bim - 1) * 2
         m2 = m1 + 1
-        dt_ini = datetime(ano, m1, 1, 0, 0, 0)
+        dt_ini = datetime(ano, m1, 1, 0, 0, 0, tzinfo=UTC)
         last_day = calendar.monthrange(ano, m2)[1]
-        dt_end = datetime(ano, m2, last_day, 23, 59, 59)
+        dt_end = datetime(ano, m2, last_day, 23, 59, 59, tzinfo=UTC)
         periodo = bim
+
     return dt_ini, dt_end, periodo
 
 
@@ -2001,39 +2066,40 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
     True se data_pedido (ordered_at) estiver dentro do período (Ano/Mês + Periodicidade).
     - NÃO aplica para modo 'produtos'.
     - Usa ordered_at_ini_periodo/ordered_at_end_periodo se existirem; senão, deriva via bounds_do_periodo.
-    - Converte TUDO para datetime naive antes de comparar.
+    - Converte TUDO para datetime *aware* (UTC) antes de comparar.
     - Logs defensivos sem referenciar variáveis ainda não definidas.
     """
+    from datetime import datetime  # import local para não poluir topo
 
-    def _naive(dt: datetime) -> datetime:
-        try:
-            return dt.replace(tzinfo=None)
-        except Exception:
-            return dt
+    def _aware_utc(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        # Se vier naive, marca como UTC; se vier com tz, converte para UTC
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
     def _to_dt(val: object) -> datetime | None:
-        """Converte val -> datetime naive (aceita datetime/ISO/timestamp s|ms/QDateTime)."""
+        """Converte val -> datetime (UTC aware). Aceita datetime/ISO/timestamp s|ms/QDateTime."""
         if val is None:
             return None
         if isinstance(val, datetime):
-            return _naive(val)
+            return _aware_utc(val)
         if isinstance(val, int | float):
             try:
                 v = float(val)
                 if v > 1e12:  # ms -> s
                     v /= 1000.0
-                return datetime.fromtimestamp(v)
+                return datetime.fromtimestamp(v, tz=UTC)
             except Exception:
                 return None
         if isinstance(val, str):
             try:
-                dt = parse_date(val)  # <- mantém a chamada; só tipamos a função
-                return _naive(dt)
+                dt = parse_date(val)  # mantém a função existente
+                return _aware_utc(dt)
             except Exception:
                 return None
         if hasattr(val, "toPyDateTime"):
             try:
-                return _naive(val.toPyDateTime())
+                return _aware_utc(val.toPyDateTime())
             except Exception:
                 return None
         return None
@@ -2062,7 +2128,6 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
             mes_s = dados.get("mes")
             periodicidade = (str(dados.get("periodicidade") or "bimestral")).strip().lower()
 
-            # evita Any|None chegando no int(...)
             if ano_s is None or mes_s is None:
                 print(f"[DEBUG dentro_periodo] sem contexto suficiente (ano={ano_s}, mes={mes_s})")
                 return False
@@ -2090,11 +2155,10 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
         # Log consolidado (agora com TUDO definido)
         print(f"[DEBUG dentro_periodo] dp={dp} ini={ini} end={end}")
 
-        # 3) comparação segura
+        # 3) comparação segura (todos UTC aware)
         try:
             return ini <= dp <= end
         except Exception as e:
-            # Se der TypeError, loga os tipos para depurar
             print(
                 f"[DEBUG dentro_periodo] comparação falhou: {type(e).__name__}: {e} "
                 f"(types: ini={type(ini)}, dp={type(dp)}, end={type(end)})"
@@ -2252,6 +2316,8 @@ def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel
 def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, estado=None):
     print("[🔍 buscar_transacoes_assinaturas] Início da função")
 
+    from datetime import datetime, timedelta  # imports locais p/ não depender do topo
+
     transacoes = []
     if estado is None:
         estado = {}
@@ -2289,29 +2355,47 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
             "ordered_at_ini / ordered_at_end não informados para o período selecionado."
         )
 
-    # ================= Helpers de data =================
+    # ================= Helpers de data (UTC aware) =================
+    def _aware_utc(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
     def _as_dt(x):
-        return x if isinstance(x, datetime) else datetime.fromisoformat(str(x))
+        """Aceita datetime/str ISO e devolve datetime UTC aware."""
+        if isinstance(x, datetime):
+            return _aware_utc(x)
+        try:
+            # tenta ISO; se vier naive, marca UTC
+            d = datetime.fromisoformat(str(x))
+            return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
+        except Exception:
+            # fallback conservador: recusa em vez de criar naive
+            raise
 
-    def _first_day_next_month(dt):
+    def _first_day_next_month(dt: datetime) -> datetime:
+        dt = _aware_utc(dt)
         y, m = dt.year, dt.month
-        return datetime(y + (m // 12), 1 if m == 12 else m + 1, 1)
+        return datetime(y + (m // 12), 1 if m == 12 else m + 1, 1, tzinfo=UTC)
 
-    def _last_moment_of_month(y, m):
+    def _last_moment_of_month(y: int, m: int) -> datetime:
         if m == 12:
-            return datetime(y, 12, 31, 23, 59, 59, 999999)
-        nxt = datetime(y, m + 1, 1)
+            return datetime(y, 12, 31, 23, 59, 59, 999_999, tzinfo=UTC)
+        nxt = datetime(y, m + 1, 1, tzinfo=UTC)
         return nxt - timedelta(microseconds=1)
 
-    def _inicio_mes_por_data(dt):
-        return datetime(dt.year, dt.month, 1)
+    def _inicio_mes_por_data(dt: datetime) -> datetime:
+        dt = _aware_utc(dt)
+        return datetime(dt.year, dt.month, 1, tzinfo=UTC)
 
-    def _inicio_bimestre_por_data(dt):
+    def _inicio_bimestre_por_data(dt: datetime) -> datetime:
+        dt = _aware_utc(dt)
         # bimestres: (1-2), (3-4), (5-6), (7-8), (9-10), (11-12)
         m_ini = dt.month if dt.month % 2 == 1 else dt.month - 1
-        return datetime(dt.year, m_ini, 1)
+        return datetime(dt.year, m_ini, 1, tzinfo=UTC)
 
-    def _fim_bimestre_por_data(dt):
+    def _fim_bimestre_por_data(dt: datetime) -> datetime:
+        dt = _aware_utc(dt)
         m_end = dt.month if dt.month % 2 == 0 else dt.month + 1
         y = dt.year
         if m_end == 13:
@@ -2319,7 +2403,7 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
             m_end = 1
         return _last_moment_of_month(y, m_end)
 
-    LIMITE_INFERIOR = datetime(2024, 10, 1)
+    LIMITE_INFERIOR = datetime(2024, 10, 1, tzinfo=UTC)
 
     # ================= Normaliza período selecionado =================
     end_sel = _as_dt(dt_end_sel)
@@ -2331,7 +2415,7 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         end_sel = _fim_bimestre_por_data(end_sel)
 
     # ================= Constrói intervalos =================
-    # Mensais e bimestrais: sempre o período selecionado (mês ou bimestre)
+    # Observação: dividir_busca_em_periodos aceita date/datetime e retorna ("YYYY-MM-DD","YYYY-MM-DD")
     intervalos_mensais = (
         dividir_busca_em_periodos(ini_sel, end_sel) if periodicidade_sel == "mensal" else []
     )
@@ -2342,13 +2426,12 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
     # Multi-ano: início = (primeiro dia do mês seguinte ao fim selecionado) - N anos, limitado por LIMITE_INFERIOR
     inicio_base = _first_day_next_month(end_sel)
 
-    def _janela_multi_ano(n_anos):
-        ini = datetime(inicio_base.year - n_anos, inicio_base.month, 1)
+    def _janela_multi_ano(n_anos: int):
+        ini = datetime(inicio_base.year - n_anos, inicio_base.month, 1, tzinfo=UTC)
         ini = max(ini, LIMITE_INFERIOR)
         return dividir_busca_em_periodos(ini, end_sel)
 
     # ================= Modo do período (PERÍODO vs TODAS) =================
-    # normaliza acentos para aceitar "PERÍODO" e "PERIODO"
     try:
         from unidecode import unidecode
 
@@ -2360,12 +2443,12 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         )
 
     if modo_sel_norm == "PERIODO":
-        # FIX (1): quando é PERÍODO/PERIODO, até os multi-ano buscam SÓ o mês/bimestre selecionado
+        # FIX (1): só o mês/bimestre selecionado
         intervalos_anuais = dividir_busca_em_periodos(ini_sel, end_sel)
         intervalos_bianuais = dividir_busca_em_periodos(ini_sel, end_sel)
         intervalos_trianuais = dividir_busca_em_periodos(ini_sel, end_sel)
     else:
-        # TODAS: mantém comportamento original (janelas de 1, 2 e 3 anos retroativas)
+        # TODAS: janelas de 1, 2 e 3 anos retroativas
         intervalos_anuais = _janela_multi_ano(1)
         intervalos_bianuais = _janela_multi_ano(2)
         intervalos_trianuais = _janela_multi_ano(3)
@@ -2723,30 +2806,45 @@ def formatar_valor(valor):
 def recebe_box_do_periodo(
     ordered_at_end_anchor: datetime, data_check: datetime, periodicidade: str
 ) -> bool:
-    periodicidade = (periodicidade or "bimestral").lower()
+    """Verifica se data_check cai no mês/bimestre ancorado em ordered_at_end_anchor.
+    Tudo convertido para UTC 'aware' antes de comparar (evita DTZ)."""
+    periodicidade = (periodicidade or "bimestral").strip().lower()
+
+    def _aware_utc(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        # se vier naive -> marca como UTC; se vier com tz -> converte para UTC
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+
+    anchor = _aware_utc(ordered_at_end_anchor)
+    dc = _aware_utc(data_check)
+    if anchor is None or dc is None:
+        return False
+
+    ano = anchor.year
+    mes = anchor.month
 
     if periodicidade == "mensal":
-        ano = ordered_at_end_anchor.year
-        mes = ordered_at_end_anchor.month
-        inicio = datetime(ano, mes, 1)
-        fim = (
-            (datetime(ano + 1, 1, 1) - timedelta(seconds=1))
-            if mes == 12
-            else (datetime(ano, mes + 1, 1) - timedelta(seconds=1))
-        )
-        return inicio <= data_check <= fim
+        inicio = datetime(ano, mes, 1, 0, 0, 0, tzinfo=UTC)
+        if mes == 12:
+            prox_ini = datetime(ano + 1, 1, 1, 0, 0, 0, tzinfo=UTC)
+        else:
+            prox_ini = datetime(ano, mes + 1, 1, 0, 0, 0, tzinfo=UTC)
+        fim = prox_ini - timedelta(seconds=1)
+        return inicio <= dc <= fim
 
     # bimestral (padrão)
-    mes = ordered_at_end_anchor.month
-    ano = ordered_at_end_anchor.year
-    primeiro_mes = ((mes - 1) // 2) * 2 + 1
-    inicio = datetime(ano, primeiro_mes, 1)
-    fim = (
-        (datetime(ano + 1, 1, 1) - timedelta(days=1))
-        if primeiro_mes + 1 == 12
-        else (datetime(ano, primeiro_mes + 2, 1) - timedelta(seconds=1))
-    )
-    return inicio <= data_check <= fim
+    primeiro_mes = ((mes - 1) // 2) * 2 + 1  # 1,3,5,7,9,11
+    inicio = datetime(ano, primeiro_mes, 1, 0, 0, 0, tzinfo=UTC)
+    if primeiro_mes + 1 == 12:
+        prox_ini = datetime(ano + 1, 1, 1, 0, 0, 0, tzinfo=UTC)
+        # fim do bimestre 11-12 é 31/12 23:59:59
+        fim = prox_ini - timedelta(days=1)  # mantém sua semântica original
+        fim = datetime(fim.year, fim.month, fim.day, 23, 59, 59, tzinfo=UTC)
+    else:
+        prox_ini = datetime(ano, primeiro_mes + 2, 1, 0, 0, 0, tzinfo=UTC)
+        fim = prox_ini - timedelta(seconds=1)
+    return inicio <= dc <= fim
 
 
 def configurar_cancelamento_em_janela(janela, cancelador):
@@ -2805,7 +2903,7 @@ def gerar_linha_base(
         # Comprador
         "Nome Comprador": contact.get("name", ""),
         "Data Pedido": valores["data_pedido"].strftime("%d/%m/%Y"),
-        "Data": datetime.today().strftime("%d/%m/%Y"),
+        "Data": QDate.currentDate().toString("dd/MM/yyyy"),
         "CPF/CNPJ Comprador": contact.get("doc", ""),
         "Endereço Comprador": contact.get("address", ""),
         "Número Comprador": contact.get("address_number", ""),
@@ -2985,23 +3083,48 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
 
     # helper: normaliza para timestamp
     def _to_ts(val):
+        """
+        Converte val -> timestamp (segundos desde epoch, UTC).
+        Aceita:
+        - None -> None
+        - int/float (ms ou s) -> float(s)
+        - datetime (naive/aware) -> float(s) [naive assume UTC]
+        - str (parse_date) -> float(s) [naive assume UTC]
+        - objetos com .toPyDateTime() -> float(s)
+        """
         if val is None:
             return None
+
+        # numérico: suporta ms
         if isinstance(val, int | float):
-            return float(val)
+            v = float(val)
+            if v > 1e12:  # ms -> s
+                v /= 1000.0
+            return v
+
+        # datetime
         if isinstance(val, datetime):
+            dt = val if val.tzinfo else val.replace(tzinfo=UTC)
+            return dt.timestamp()
+
+        # QDateTime / similares
+        if hasattr(val, "toPyDateTime"):
             try:
-                return val.timestamp()
-            except Exception:
-                return None
-        if isinstance(val, str):
-            try:
-                dt = parse_date(val)
-                if getattr(dt, "tzinfo", None):
-                    dt = dt.replace(tzinfo=None)
+                dt = val.toPyDateTime()
+                dt = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
                 return dt.timestamp()
             except Exception:
                 return None
+
+        # string -> datetime via parse_date
+        if isinstance(val, str):
+            try:
+                dt = parse_date(val)
+                dt = dt if getattr(dt, "tzinfo", None) else dt.replace(tzinfo=UTC)
+                return dt.timestamp()
+            except Exception:
+                return None
+
         return None
 
     # flatten defensivo
@@ -3118,9 +3241,12 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
 
             def safe_parse_date(t):
                 try:
-                    return parse_date(t.get("ordered_at") or t.get("created_at") or "1900-01-01")
+                    s = t.get("ordered_at") or t.get("created_at") or "1900-01-01"
+                    dt = parse_date(s)
+                    # Normaliza para UTC aware
+                    return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
                 except Exception:
-                    return datetime(1900, 1, 1)
+                    return datetime(1900, 1, 1, tzinfo=UTC)
 
             print(
                 f"[DEBUG assinatura] subscription_id={subscription_id} qtd_transacoes={len(grupo_transacoes)}"
@@ -3579,8 +3705,8 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
         try:
             val = float(ts)
             if val > 1e12:  # ms → s
-                val = val / 1000.0
-            data_pedido = datetime.fromtimestamp(val)
+                val /= 1000.0
+            data_pedido = datetime.fromtimestamp(val, tz=UTC)
         except Exception:
             s = transacao.get("ordered_at") or transacao.get("created_at") or "1970-01-01"
             dt = parse_date(s)
@@ -4055,8 +4181,8 @@ def importar_envios_realizados_planilha():
         )
 
         # pergunta ano/mês
-        ano_atual = datetime.today().year
-        mes_padrao = datetime.today().month
+        ano_atual = QDate.currentDate().year()
+        mes_padrao = QDate.currentDate().month()
         ano, ok1 = QInputDialog.getInt(
             None, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
         )
@@ -4079,7 +4205,7 @@ def importar_envios_realizados_planilha():
 
         registros_assinaturas = []
         registros_produtos = []
-        registro_em = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        registro_em = local_now().strftime("%Y-%m-%d %H:%M:%S")
 
         for _, r in df.iterrows():
             sid = str(r.get("subscription_id", "")).strip()
@@ -4353,14 +4479,14 @@ def importar_planilha_pedidos_guru():
             try:
                 data_pedido = pd.to_datetime(data_pedido_raw, dayfirst=True).strftime("%d/%m/%Y")
             except Exception:
-                data_pedido = datetime.today().strftime("%d/%m/%Y")
+                data_pedido = QDate.currentDate().toString("dd/MM/yyyy")
 
             registros.append(
                 {
                     "Número pedido": "",
                     "Nome Comprador": limpar(linha.get("nome contato")),
                     "Data Pedido": data_pedido,
-                    "Data": datetime.today().strftime("%d/%m/%Y"),
+                    "Data": QDate.currentDate().toString("dd/MM/yyyy"),
                     "CPF/CNPJ Comprador": cpf,
                     "Endereço Comprador": limpar(linha.get("logradouro contato")),
                     "Bairro Comprador": limpar(linha.get("bairro contato")),
@@ -4633,8 +4759,8 @@ def filtrar_linhas_ja_enviadas():
     df["periodo"] = pd.to_numeric(df.get("periodo", ""), errors="coerce").fillna(-1).astype(int)
 
     # seleção do período
-    ano_atual = datetime.today().year
-    mes_padrao = datetime.today().month
+    ano_atual = QDate.currentDate().year()
+    mes_padrao = QDate.currentDate().month()
     ano, ok1 = QInputDialog.getInt(
         None, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
     )
@@ -4718,8 +4844,8 @@ def registrar_envios_por_mes_ano():
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhuma planilha carregada.")
         return
 
-    ano_atual = datetime.today().year
-    mes_padrao = datetime.today().month
+    ano_atual = QDate.currentDate().year()
+    mes_padrao = QDate.currentDate().year()
 
     ano, ok1 = QInputDialog.getInt(
         None, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
@@ -4808,7 +4934,7 @@ def gerar_log_envios(df, ano, periodicidade, periodo):
 
     registros_assinaturas = []
     registros_produtos = []
-    registro_em = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    registro_em = local_now().strftime("%Y-%m-%d %H:%M:%S")
 
     tem_id_lote = "ID Lote" in df.columns
 
@@ -5581,7 +5707,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
 
         # valida data início
         try:
-            data_inicio = datetime.strptime(self.data_inicio_str, "%d/%m/%Y")
+            data_inicio = datetime.strptime(self.data_inicio_str, "%d/%m/%Y").replace(tzinfo=TZ_APP)
         except Exception as e:
             self._log_erro("Data inválida", detalhe=str(e), exc=e)
             return
@@ -6830,7 +6956,7 @@ def tratar_resultado(pedidos, produto_alvo, skus_info, estado, gerenciador, depo
                     "Número pedido": pedido.get("name", ""),
                     "Nome Comprador": nome_cliente,
                     "Data Pedido": (pedido.get("createdAt") or "")[:10],
-                    "Data": datetime.today().strftime("%d/%m/%Y"),
+                    "Data": local_now().strftime("%d/%m/%Y"),
                     "CPF/CNPJ Comprador": "",
                     "Endereço Comprador": endereco.get("address1", ""),
                     "Bairro Comprador": endereco.get("district", ""),
@@ -7669,7 +7795,7 @@ class VisualizadorPlanilhaDialog(QDialog):
                 item = QTableWidgetItem(valor)
                 if col in ["Data", "Data Pedido"]:
                     try:
-                        dt = datetime.strptime(valor, "%d/%m/%Y")
+                        dt = datetime.strptime(valor, "%d/%m/%Y").replace(tzinfo=TZ_APP)
                         item.setData(Qt.UserRole, dt)
                     except Exception:
                         pass
@@ -8041,7 +8167,7 @@ def salvar_planilha_final(df: pd.DataFrame, output_path: str) -> None:
     try:
         df_para_pdf = df_final.copy()
         data_envio_str = df_para_pdf["Data"].dropna().iloc[0]
-        data_envio = datetime.strptime(data_envio_str, "%d/%m/%Y")
+        data_envio = datetime.strptime(data_envio_str, "%d/%m/%Y").replace(tzinfo=TZ_APP)
 
         raw_info = estado.get("ultimo_log") if isinstance(estado, dict) else None
         info = cast(dict[str, Any], raw_info or {})
@@ -8625,13 +8751,13 @@ def criar_grupo_guru(estado, skus_info, transportadoras_var):
     linha_filtros = QHBoxLayout()
     ano_spin = QSpinBox()
     ano_spin.setRange(2020, 2035)
-    ano_spin.setValue(datetime.today().year)
+    ano_spin.setValue(QDate.currentDate().year())
     linha_filtros.addWidget(QLabel("Ano:"))
     linha_filtros.addWidget(ano_spin)
 
     combo_mes = QComboBox()
     combo_mes.addItems([str(i) for i in range(1, 13)])
-    combo_mes.setCurrentIndex(datetime.today().month - 1)
+    combo_mes.setCurrentIndex(QDate.currentDate().month() - 1)
     linha_filtros.addWidget(QLabel("Mês:"))
     linha_filtros.addWidget(combo_mes)
 

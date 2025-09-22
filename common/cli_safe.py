@@ -30,32 +30,31 @@ def safe_cli(main_func: Callable[..., int | None]) -> Callable[..., int]:
 
     @functools.wraps(main_func)
     def wrapper(*args: Any, **kwargs: Any) -> int:
+        status: int = 1  # fallback padrão
         try:
             result = main_func(*args, **kwargs)
-            if result is None:
-                return 0
-            return int(result)
+            status = int(result) if result is not None else 0
         except KeyboardInterrupt:
-            return 130
+            status = 130
         except BrokenPipeError:
             try:
                 sys.stdout.flush()
             except Exception:
                 pass
-            return 0
+            status = 0
         except SystemExit as e:
             try:
-                return int(e.code) if e.code is not None else 1
+                status = int(e.code) if e.code is not None else 1
             except Exception:
-                return 1
+                status = 1
         except Exception as exc:
             debug = _is_debug_enabled()
             if debug:
                 traceback.print_exc()
             msg = to_user_message(exc, debug=debug)
             print(msg, file=sys.stderr)
-            return 2 if isinstance(exc, AppError) else 1
+            status = 2 if isinstance(exc, AppError) else 1
 
-        return 1  # fallback
+        return status
 
     return wrapper

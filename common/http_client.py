@@ -17,6 +17,8 @@ except Exception:
 
     _URLLIB3_V2 = True
 
+from functools import lru_cache
+
 from .errors import ExternalError
 
 # (connect, read) em segundos — pode ser sobrescrito em cada chamada
@@ -28,9 +30,6 @@ TRANSIENT_STATUSES = (429, 500, 502, 503, 504)
 # Métodos que podem ser automaticamente repetidos com segurança
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "POST"})
 
-# Sessão singleton (thread-safe o suficiente para a maioria dos casos de uso do requests)
-_SESSION: requests.Session | None = None
-
 
 def _build_retry(
     total: int = 5,
@@ -41,7 +40,6 @@ def _build_retry(
     """
     Cria política de retry exponencial com respeito a Retry-After (429/503).
     """
-    # kwargs compatíveis com urllib3 1.26.x e 2.x
     retry = Retry(
         total=total,
         connect=total,
@@ -74,46 +72,44 @@ def _build_session() -> requests.Session:
     return s
 
 
-def get_session() -> requests.Session:
+@lru_cache(maxsize=1)
+def _get_cached_session() -> requests.Session:
+    """Sessão padrão (singleton leve, sem global mutável)."""
+    return _build_session()
+
+
+def get_session(session: requests.Session | None = None) -> requests.Session:
     """
     Retorna uma sessão global com retries/backoff configurados.
-    Permite ser trocada em testes passando `session=` nas funções http_*
+    Permite ser trocada em testes passando `session=` nas funções http_*.
     """
-    global _SESSION
-    if _SESSION is None:
-        _SESSION = _build_session()
-    return _SESSION
+    return session or _get_cached_session()
+
+
+# Em testes, se precisar reinicializar a sessão padrão:
+# _get_cached_session.cache_clear()
 
 
 def http_get(url: str, **kwargs: Any) -> requests.Response:
     """
     GET com timeout padrão, retries exponenciais (inclui 429/5xx),
     e tradução de erros para ExternalError.
-    Aceita:
-      - timeout=(connect, read) ou float
-      - params, headers, etc. (requests)
-      - session: requests.Session (para testes/mocks)
-      - jitter_max: float -> jitter aleatório extra (segundos) antes da 1ª tentativa
     """
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     session: requests.Session = kwargs.pop("session", get_session())
     jitter_max: float = kwargs.pop("jitter_max", 0.0)
 
-    # Jitter opcional antes da 1ª tentativa (útil quando muitos workers disparam juntos)
     if jitter_max and jitter_max > 0:
-        # Import local para evitar custo quando não usado
         import time
 
         time.sleep(random.uniform(0, jitter_max))
 
     try:
         res = session.get(url, timeout=timeout, **kwargs)
-        # Se a política de retry esgotou, ainda podemos chegar aqui com status 4xx/5xx
         res.raise_for_status()
         return res
 
     except requests.Timeout as e:
-        # Timeout de conexão ou leitura
         raise ExternalError(
             f"Timeout ao chamar {url}",
             code="HTTP_TIMEOUT",
@@ -123,13 +119,9 @@ def http_get(url: str, **kwargs: Any) -> requests.Response:
         ) from e
 
     except requests.HTTPError as e:
-        # Pode ser 4xx/5xx após esgotar retries. Capturamos status (se houver)
         raw_status: Any = getattr(e.response, "status_code", None)
         status: int | None = raw_status if isinstance(raw_status, int) else None
-
-        # 429 e 5xx são geralmente transitórios; 4xx (exceto 429) normalmente não.
         retryable = bool(status in TRANSIENT_STATUSES)
-
         raise ExternalError(
             f"Falha HTTP {status} ao chamar {url}",
             code="HTTP_ERROR",
@@ -139,7 +131,6 @@ def http_get(url: str, **kwargs: Any) -> requests.Response:
         ) from e
 
     except requests.RequestException as e:
-        # DNS, conexão abortada, TLS, etc. — tratar como transitório por padrão
         raise ExternalError(
             f"Erro de rede ao chamar {url}",
             code="HTTP_REQUEST_ERROR",
@@ -153,12 +144,6 @@ def http_post(url: str, **kwargs: Any) -> requests.Response:
     """
     POST com timeout padrão, retries (inclui 429/5xx, respeita Retry-After),
     e tradução de erros para ExternalError.
-
-    Aceita:
-      - timeout=(connect, read) ou float
-      - json, data, headers, etc. (kwargs do requests)
-      - session: requests.Session (para testes/mocks)
-      - jitter_max: float -> atraso aleatório opcional antes da 1ª tentativa
     """
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     session: requests.Session = kwargs.pop("session", get_session())
@@ -186,7 +171,7 @@ def http_post(url: str, **kwargs: Any) -> requests.Response:
     except requests.HTTPError as e:
         raw_status: Any = getattr(e.response, "status_code", None)
         status: int | None = raw_status if isinstance(raw_status, int) else None
-        retryable = bool(status in TRANSIENT_STATUSES)  # 429/5xx
+        retryable = bool(status in TRANSIENT_STATUSES)
         raise ExternalError(
             f"Falha HTTP {status} ao chamar {url}",
             code="HTTP_ERROR",

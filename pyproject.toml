@@ -9,14 +9,21 @@ target-version = "py313"
 [tool.ruff.lint]
 # Regras ativas (equilíbrio entre signal/ruído)
 select = [
-  "E",   # pycodestyle
-  "F",   # pyflakes (erros comuns)
-  "I",   # isort (organização de imports)
-  "B",   # bugbear (boas práticas/bugs comuns)
-  "UP",  # pyupgrade (modernizações)
-  "ARG", # argumentos não usados (detecção mais fina)
-  "RUF", # regras extras do Ruff
-  "C4",  # comprehensions (otimizações/sinais)
+  "E",     # pycodestyle
+  "F",     # pyflakes (erros comuns)
+  "I",     # isort (organização de imports)
+  "B",     # bugbear (boas práticas/bugs comuns)
+  "UP",    # pyupgrade (modernizações)
+  "ARG",   # argumentos não usados (detecção mais fina)
+  "RUF",   # regras extras do Ruff
+  "C4",    # comprehensions (otimizações/sinais)
+  "DTZ",   # datetime timezone-aware
+  "PLR",   # pylint - regras de complexidade
+  "PLW",   # pylint - warnings
+  "E722",  # except cru
+  "E731",  # lambda atribuído a variável
+  "E741",  # variáveis com nomes confusos
+  "RUF013" # Optional implícito
 ]
 # Black decide a quebra de linha
 ignore = ["E203", "E501"]
@@ -26,9 +33,6 @@ ignore = ["E203", "E501"]
 "main.py" = [
   "PLR", # refatorações de complexidade (por ora)
   "PLW", # avisos de estilo/legibilidade pesados
-  "DTZ", # datetime naive (tratar depois, quando dividir responsabilidades)
-  # Se ainda houver muitos prints/except crus, dá pra adicionar temporários:
-  # "E722", "E731", "E741", "RUF013"
 ]
 
 [tool.ruff.lint.isort]
