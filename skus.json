@@ -66,7 +66,7 @@
         ],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": false,
+        "indisponivel": true,
         "preco_fallback": 89.9
     },
     "Heráclito": {

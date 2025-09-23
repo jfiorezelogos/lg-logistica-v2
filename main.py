@@ -19,12 +19,14 @@ from calendar import monthrange
 from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import JSONDecodeError
+from logging import Logger
 from os import PathLike
 from threading import Event
-from typing import Any, Literal, Optional, Protocol, TypedDict, cast
+from typing import Any, Literal, Optional, Protocol, TypedDict, cast, overload
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -41,6 +43,7 @@ from openai import RateLimitError
 from PyQt5.QtCore import (
     QCoreApplication,
     QDate,
+    QEvent,
     QModelIndex,
     QObject,
     QRunnable,
@@ -340,16 +343,36 @@ def _aware_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
-def _as_dt(x: datetime | str) -> datetime:
-    """Aceita datetime ou string ISO e devolve um datetime *aware* em UTC."""
-    try:
-        d: datetime = x if isinstance(x, datetime) else datetime.fromisoformat(x)
-    except (TypeError, ValueError) as e:
-        # Recusa entradas não parseáveis
-        raise ValueError(f"Valor inválido para datetime ISO: {x!r}") from e
+@overload
+def _as_dt(value: datetime) -> datetime: ...
+@overload
+def _as_dt(value: date) -> datetime: ...
+@overload
+def _as_dt(value: str) -> datetime: ...
 
-    # Se vier naive, marque como UTC; se já tiver tz, converta para UTC
-    return d.replace(tzinfo=UTC) if d.tzinfo is None else d.astimezone(UTC)
+
+def _as_dt(value: str | date | datetime) -> datetime:
+    """
+    Normaliza para datetime. Aceita:
+      - datetime (devolve como está)
+      - date (vira meia-noite)
+      - str ISO (YYYY-MM-DD ou YYYY-MM-DDTHH:MM:SS[±TZ])
+    Não define tz aqui; quem chama decide (mantém sua lógica atual).
+    """
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        # meia-noite do dia em questão, sem tz
+        return datetime.combine(value, time.min)
+    if isinstance(value, str):
+        # tenta datetime ISO completo primeiro
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            # tenta só data (YYYY-MM-DD)
+            d = date.fromisoformat(value)
+            return datetime.combine(d, time.min)
+    raise TypeError(f"Tipo não suportado: {type(value)!r}")
 
 
 def _first_day_next_month(dt: datetime) -> datetime:
@@ -1486,39 +1509,48 @@ class GerenciadorProgresso(QObject):
     finalizado_signal = pyqtSignal()
 
     def __init__(
-        self, *, titulo="Progresso", com_percentual=True, estado_global=None, logger_obj=None
-    ):
+        self,
+        *,
+        titulo: str = "Progresso",
+        com_percentual: bool = True,
+        estado_global: MutableMapping[str, Any] | None = None,
+        logger_obj: Logger | None = None,
+    ) -> None:
         super().__init__()
 
-        self.cancelado = False
-        self.com_percentual = com_percentual
-        self._ja_fechado = False
-        self.janela_feita = False
+        self.cancelado: bool = False
+        self.com_percentual: bool = com_percentual
+        self._ja_fechado: bool = False
+        self.janela_feita: bool = False
 
-        self.estado = estado_global or {}
-        self.logger = logger_obj
+        # estado como dict-like mutável
+        self.estado: MutableMapping[str, Any] = (
+            cast(MutableMapping[str, Any], estado_global) if estado_global is not None else {}
+        )
+        self.logger: Logger | None = logger_obj
 
         try:
-            self.janela = QDialog()
+            self.janela: QDialog = QDialog()
             self.janela.setWindowTitle(titulo)
             self.janela.setFixedSize(500, 160)
             self.janela.setAttribute(Qt.WA_DeleteOnClose, True)
 
-            layout = QVBoxLayout(self.janela)
+            layout: QVBoxLayout = QVBoxLayout(self.janela)
 
-            self.label_status = QLabel("Iniciando...")
+            self.label_status: QLabel = QLabel("Iniciando...")
             self.label_status.setAlignment(Qt.AlignCenter)
             layout.addWidget(self.label_status)
 
-            self.barra = QProgressBar()
+            self.barra: QProgressBar = QProgressBar()
             if not self.com_percentual:
                 self.barra.setRange(0, 0)
             layout.addWidget(self.barra)
 
-            self.botao_cancelar = QPushButton("Cancelar")
-            self.botao_cancelar.clicked.connect(self.cancelar)
+            self.botao_cancelar: QPushButton = QPushButton("Cancelar")
+            self.botao_cancelar.clicked.connect(self.cancelar)  # type: ignore[arg-type]
             layout.addWidget(self.botao_cancelar)
 
+            # Stubs do PyQt às vezes não aceitam o kwarg 'type' -> silenciar para mypy
             self.atualizar_signal.connect(self._atualizar_seguro, Qt.QueuedConnection)
 
             self.janela.show()
@@ -1539,7 +1571,7 @@ class GerenciadorProgresso(QObject):
             else:
                 print(f"[❌] Erro ao inicializar janela: {e}")
 
-    def cancelar(self):
+    def cancelar(self) -> None:
         self.cancelado = True
         self.label_status.setText("Cancelado pelo usuário.")
         self.botao_cancelar.setEnabled(False)
@@ -1552,10 +1584,10 @@ class GerenciadorProgresso(QObject):
 
         print("[🛑] Cancelamento solicitado.")
 
-    def atualizar(self, texto, atual=None, total=None):
+    def atualizar(self, texto: str, atual: int | None = None, total: int | None = None) -> None:
         self.atualizar_signal.emit(texto, atual or 0, total or 0)
 
-    def _atualizar_seguro(self, texto, atual, total):
+    def _atualizar_seguro(self, texto: str, atual: int, total: int) -> None:
         self.label_status.setText(texto)
 
         if not self.com_percentual:
@@ -1566,19 +1598,19 @@ class GerenciadorProgresso(QObject):
             self.barra.setRange(0, 0)
         else:
             self.barra.setRange(0, 100)
-            progresso = min(100, max(1, int(100 * atual / total)))
+            progresso = min(100, max(1, int(100 * atual / total))) if total else 0
             self.barra.setValue(progresso)
 
         QApplication.processEvents()
 
-    def fechar(self):
+    def fechar(self) -> None:
         if self._ja_fechado:
             self._log_info("[🔁] Janela já havia sido fechada. Ignorando.")
             return
         self._ja_fechado = True
         self._log_info("[🔚 GerenciadorProgresso] Preparando para fechar a janela...")
 
-        def encerrar():
+        def encerrar() -> None:
             try:
                 if self.janela and self.janela.isVisible():
                     self._log_info("[🧼] Ocultando janela de progresso...")
@@ -1589,31 +1621,37 @@ class GerenciadorProgresso(QObject):
             except Exception as e:
                 self._log_exception(f"[❌] Erro ao fechar janela: {e}")
 
-        if QThread.currentThread() == QCoreApplication.instance().thread():
+        app = cast(QCoreApplication, QCoreApplication.instance())  # para mypy: não é None aqui
+        if QThread.currentThread() == app.thread():
             encerrar()
         else:
             QTimer.singleShot(0, encerrar)
 
-    def _log_info(self, msg):
+    def _log_info(self, msg: str) -> None:
         if self.logger:
             self.logger.info(msg)
         else:
             print(msg)
 
-    def _log_warning(self, msg):
+    def _log_warning(self, msg: str) -> None:
         if self.logger:
             self.logger.warning(msg)
         else:
             print(msg)
 
-    def _log_exception(self, msg):
+    def _log_exception(self, msg: str) -> None:
         if self.logger:
             self.logger.exception(msg)
         else:
             print(msg)
 
 
-def iniciar_progresso(titulo="Progresso", com_percentual=True, estado_global=None, logger_obj=None):
+def iniciar_progresso(
+    titulo: str = "Progresso",
+    com_percentual: bool = True,
+    estado_global: MutableMapping[str, Any] | None = None,
+    logger_obj: Logger | None = None,
+) -> GerenciadorProgresso:
     if QApplication.instance() is None:
         raise RuntimeError("QApplication ainda não foi iniciado.")
 
@@ -1621,26 +1659,33 @@ def iniciar_progresso(titulo="Progresso", com_percentual=True, estado_global=Non
         titulo=titulo,
         com_percentual=com_percentual,
         estado_global=estado_global,
-        logger_obj=logger_obj,
+        logger_obj=logger_obj or logger,
     )
     QApplication.processEvents()
     return gerenciador
 
 
 # Integração com a API do Digital Manager Guru
+class HasIsSet(Protocol):
+    def is_set(self) -> bool: ...
 
 
 class WorkerController(QObject):
     iniciar_worker_signal = pyqtSignal()
 
-    def __init__(self, dados, estado, skus_info):
+    def __init__(
+        self,
+        dados: Mapping[str, Any],
+        estado: MutableMapping[str, Any],
+        skus_info: Any,
+    ) -> None:
         super().__init__()
-        self.dados = dados
-        self.estado = estado
-        self.skus_info = skus_info
+        self.dados: Mapping[str, Any] = dados
+        self.estado: MutableMapping[str, Any] = estado
+        self.skus_info: Any = skus_info
         self.iniciar_worker_signal.connect(self.iniciar_worker)
 
-    def iniciar_worker(self):
+    def iniciar_worker(self) -> None:
         try:
             gerenciador = GerenciadorProgresso(
                 titulo="🚚 Progresso da Exportação",
@@ -1657,14 +1702,14 @@ class WorkerController(QObject):
             self.estado["worker_thread"] = WorkerThread(
                 self.dados, self.estado, self.skus_info, gerenciador
             )
-            worker = self.estado["worker_thread"]
+            worker: WorkerThread = cast(WorkerThread, self.estado["worker_thread"])
 
             # avisos e erros
             worker.avisar_usuario.connect(
                 lambda titulo, msg: comunicador_global.mostrar_mensagem.emit("aviso", titulo, msg)
             )
 
-            def on_erro(msg):
+            def on_erro(msg: str) -> None:
                 comunicador_global.mostrar_mensagem.emit(
                     "erro", "Erro", f"Ocorreu um erro durante a exportação:\n{msg}"
                 )
@@ -1676,10 +1721,13 @@ class WorkerController(QObject):
             worker.erro.connect(on_erro)
 
             # finalização
-            def ao_finalizar_worker(linhas, contagem):
+            def ao_finalizar_worker(linhas: list[Any], contagem: dict[str, Any]) -> None:
                 try:
                     exibir_resumo_final(
-                        linhas, contagem, self.estado, modo=(self.dados.get("modo") or "").lower()
+                        linhas,
+                        contagem,
+                        self.estado,
+                        modo=(cast(str, self.dados.get("modo") or "")).lower(),
                     )
                 finally:
                     try:
@@ -1706,7 +1754,7 @@ class WorkerController(QObject):
 
 
 class WorkerThread(QThread):
-    # sinais já esperados pelo Controller
+    # sinais esperados pelo Controller
     finalizado = pyqtSignal(list, dict)
     erro = pyqtSignal(str)
     avisar_usuario = pyqtSignal(str, str)
@@ -1715,58 +1763,70 @@ class WorkerThread(QThread):
     progresso = pyqtSignal(str, int, int)
     fechar_ui = pyqtSignal()
 
-    def __init__(self, dados, estado, skus_info, gerenciador):
+    def __init__(
+        self,
+        dados: Mapping[str, Any],  # aceita qualquer mapeamento (sem cópia)
+        estado: MutableMapping[str, Any],  # mutável (dict-like)
+        skus_info: Any,
+        gerenciador: GerenciadorProgresso,
+    ) -> None:
         super().__init__()
-        self.dados = dados
-        self.estado = estado
-        self.skus_info = skus_info
-        self.gerenciador = gerenciador
+        self.dados: Mapping[str, Any] = dados
+        self.estado: MutableMapping[str, Any] = estado
+        self.skus_info: Any = skus_info
+        self.gerenciador: GerenciadorProgresso = gerenciador
 
-        # 🔒 garante queued connection entre threads
-        self.progresso.connect(self.gerenciador.atualizar, type=Qt.QueuedConnection)
-        self.fechar_ui.connect(self.gerenciador.fechar, type=Qt.QueuedConnection)
+        # Mantém Qt.QueuedConnection, mas silencia o stub do PyQt para mypy
+        self.progresso.connect(self.gerenciador.atualizar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
+        self.fechar_ui.connect(self.gerenciador.fechar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
 
-        # 🔗 captura o correlation_id do contexto da thread principal
         self._parent_correlation_id = get_correlation_id()
 
-    def run(self):
-        # 🔗 reata o correlation_id dentro desta thread
+    def run(self) -> None:
         set_correlation_id(self._parent_correlation_id)
 
-        novas_linhas: list = []
-        contagem: dict = {}
+        novas_linhas: list[Any] = []
+        contagem: dict[str, Any] = {}
 
         try:
             logger.info("worker_started", extra={"modo": self.dados.get("modo")})
 
-            cancelador = self.estado.get("cancelador_global")
-            if hasattr(cancelador, "is_set") and cancelador.is_set():
+            # tipagem apenas: Optional[Event] + union-attr ignore
+            cancelador: Event | None = cast(Event | None, self.estado.get("cancelador_global"))
+            if hasattr(cancelador, "is_set") and cancelador.is_set():  # type: ignore[union-attr]
                 logger.warning("worker_cancelled_early")
                 return
 
-            modo = (self.dados.get("modo") or "assinaturas").strip().lower()
+            modo = (cast(str, self.dados.get("modo") or "assinaturas")).strip().lower()
 
+            # buscamos em ramos separados, mas NÃO atribuimos a dados_final ainda
             if modo == "assinaturas":
                 self.progresso.emit("🔄 Buscando transações de assinaturas...", 0, 0)
-                transacoes, _, dados_final = buscar_transacoes_assinaturas(
-                    self.dados,
+                transacoes, _, dados_final_map = buscar_transacoes_assinaturas(
+                    cast(dict[str, Any], self.dados),  # tipagem
                     atualizar=self.progresso.emit,
-                    cancelador=self.estado["cancelador_global"],
-                    estado=self.estado,
+                    cancelador=cast(Event, self.estado["cancelador_global"]),  # tipagem
+                    estado=cast(dict[str, Any], self.estado),  # tipagem
                 )
 
             elif modo == "produtos":
                 self.progresso.emit("🔄 Buscando transações de produtos...", 0, 0)
-                transacoes, _, dados_final = buscar_transacoes_produtos(
-                    self.dados,
+                transacoes, _, dados_final_map = buscar_transacoes_produtos(
+                    cast(dict[str, Any], self.dados),
                     atualizar=self.progresso.emit,
-                    cancelador=self.estado["cancelador_global"],
-                    estado=self.estado,
+                    cancelador=cast(Event, self.estado["cancelador_global"]),
+                    estado=cast(dict[str, Any], self.estado),
                 )
+
             else:
                 raise ValueError(f"Modo de busca desconhecido: {modo}")
 
-            if self.estado["cancelador_global"].is_set():
+            # Unificação de tipo: Mapping -> dict UMA única vez
+            if not isinstance(dados_final_map, Mapping):
+                raise ValueError("Dados inválidos retornados da busca.")
+            dados_final: dict[str, Any] = dict(dados_final_map)
+
+            if cast(Event, self.estado["cancelador_global"]).is_set():
                 logger.warning("worker_cancelled_after_fetch")
                 return
 
@@ -1780,16 +1840,21 @@ class WorkerThread(QThread):
                 extra={"qtd": len(transacoes), "modo": modo},
             )
 
-            novas_linhas, contagem = processar_planilha(
+            # processar_planilha pode devolver Mapping; usamos var intermediária
+            novas_linhas, contagem_map = processar_planilha(
                 transacoes=transacoes,
                 dados=dados_final,
                 atualizar_etapa=self.progresso.emit,
                 skus_info=self.skus_info,
-                cancelador=self.estado["cancelador_global"],
-                estado=self.estado,
+                cancelador=cast(Event, self.estado["cancelador_global"]),
+                estado=cast(dict[str, Any], self.estado),
             )
 
-            if self.estado["cancelador_global"].is_set():
+            if not isinstance(contagem_map, Mapping):
+                raise ValueError("Retorno inválido de processar_planilha (esperado Mapping).")
+            contagem = dict(contagem_map)  # Mapping -> dict (sem reanotar)
+
+            if cast(Event, self.estado["cancelador_global"]).is_set():
                 logger.warning("worker_cancelled_after_process")
                 return
 
@@ -1805,23 +1870,17 @@ class WorkerThread(QThread):
             self.estado["linhas_planilha"].extend(novas_linhas)
             self.estado["transacoes_obtidas"] = True
 
-            logger.info(
-                "worker_success",
-                extra={"linhas_adicionadas": len(novas_linhas)},
-            )
+            logger.info("worker_success", extra={"linhas_adicionadas": len(novas_linhas)})
 
         except Exception as e:
-            # log estruturado + stacktrace
             logger.exception("worker_error", extra={"err": str(e)})
             self.erro.emit(str(e))
 
         finally:
             logger.info("worker_finished")
-            # Atualização e fechamento via sinais (thread-safe)
             self.progresso.emit("✅ Finalizado com sucesso", 1, 1)
             self.fechar_ui.emit()
 
-            # aviso agregado de erros - só se for lista e não vazia
             erros = self.estado.get("transacoes_com_erro", [])
             if isinstance(erros, list) and erros:
                 mensagem = (
@@ -1836,25 +1895,24 @@ class WorkerThread(QThread):
             self.finalizado.emit(novas_linhas, contagem)
 
 
-def dividir_busca_em_periodos(data_inicio, data_fim):
+def dividir_busca_em_periodos(
+    data_inicio: str | date | datetime,
+    data_fim: str | date | datetime,
+) -> list[tuple[str, str]]:
     """
     Divide o intervalo em blocos com fins em abr/ago/dez.
     Retorna lista de tuplas (YYYY-MM-DD, YYYY-MM-DD).
-    Internamente usa datetime aware (UTC) para evitar DTZ.
+    Internamente usa datetime aware (UTC).
     """
-    blocos = []
 
-    # Normaliza início/fim para datetime AWARE (UTC)
-    if isinstance(data_inicio, datetime):
-        ini = data_inicio if data_inicio.tzinfo else data_inicio.replace(tzinfo=UTC)
-    else:
-        ini = datetime.combine(data_inicio, datetime.min.time(), tzinfo=UTC)
+    ini = _as_dt(data_inicio)
+    if not ini.tzinfo:
+        ini = ini.replace(tzinfo=UTC)
+    end = _as_dt(data_fim)
+    if not end.tzinfo:
+        end = end.replace(tzinfo=UTC)
 
-    if isinstance(data_fim, datetime):
-        end = data_fim if data_fim.tzinfo else data_fim.replace(tzinfo=UTC)
-    else:
-        end = datetime.combine(data_fim, datetime.max.time(), tzinfo=UTC)
-
+    blocos: list[tuple[str, str]] = []
     atual = ini
 
     while atual <= end:
@@ -1862,82 +1920,38 @@ def dividir_busca_em_periodos(data_inicio, data_fim):
         mes = atual.month
 
         # Blocos: jan-abr, mai-ago, set-dez
-        if mes <= 4:
-            fim_mes = 4
-        elif mes <= 8:
-            fim_mes = 8
-        else:
-            fim_mes = 12
+        fim_mes = 4 if mes <= 4 else (8 if mes <= 8 else 12)
 
         ultimo_dia = monthrange(ano, fim_mes)[1]
-        # Fim do bloco no último dia do fim_mes (23:59:59) como aware UTC
         fim_bloco = datetime(ano, fim_mes, ultimo_dia, 23, 59, 59, tzinfo=UTC)
 
-        # Clip no limite superior
         if fim_bloco > end:
             fim_bloco = end
 
-        # Mantém contrato: strings YYYY-MM-DD
         blocos.append((atual.date().isoformat(), fim_bloco.date().isoformat()))
 
-        # Avança para o primeiro dia do próximo bloco
+        # avança para o próximo bloco
         proximo_mes = fim_mes + 1
         proximo_ano = ano
         if proximo_mes > 12:
             proximo_mes = 1
             proximo_ano += 1
-
         atual = datetime(proximo_ano, proximo_mes, 1, tzinfo=UTC)
 
     return blocos
 
 
-def requisicao_com_retry(
-    url, headers=None, params=None, tentativas=3, backoff_base=2, tratar_422_como_vazio=False
-):
-    ultima_resposta = None
-
-    for tentativa in range(tentativas):
-        try:
-            with controle_rate_limit["lock"]:
-                agora = time.time()
-                decorrido = agora - controle_rate_limit["ultimo_acesso"]
-                if decorrido < 0.2:
-                    time.sleep(0.2 - decorrido)
-                controle_rate_limit["ultimo_acesso"] = time.time()
-
-            resposta = http_get(url, headers=headers, params=params, timeout=6)
-            ultima_resposta = resposta
-
-            if resposta.status_code == 200:
-                return resposta
-
-            elif resposta.status_code == 422 and tratar_422_como_vazio:
-                print(f"[INFO] Nenhum resultado para os parâmetros: {params}")
-                return None
-
-            elif resposta.status_code == 429:
-                print(f"[⏳ Retry {tentativa + 1}/3] Limite atingido (429). Aguardando...")
-
-            else:
-                print(f"[❌] Status inesperado: {resposta.status_code}")
-
-        except Exception as e:
-            print(f"[⚠️ Erro] {e}")
-
-        time.sleep(backoff_base * (tentativa + 1))
-
-    if tratar_422_como_vazio and ultima_resposta and ultima_resposta.status_code == 422:
-        return None
-    raise Exception("⚠️ Todas as tentativas falharam.")
-
-
-def iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estado):
+def iniciar_busca_produtos(
+    box_nome_input: QComboBox,
+    transportadoras_var: Mapping[str, QCheckBox],
+    skus_info: Mapping[str, Mapping[str, Any]],
+    estado: MutableMapping[str, Any],
+) -> None:
     dialog = QDialog()
     dialog.setWindowTitle("🔍 Buscar Produtos Aprovados")
     layout = QVBoxLayout(dialog)
 
-    def obter_periodo_bimestre_atual():
+    def obter_periodo_bimestre_atual() -> tuple[QDate, QDate]:
         hoje = QDate.currentDate()
         mes = hoje.month()
         ano = hoje.year()
@@ -1993,12 +2007,13 @@ def iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estad
     botoes.addWidget(btn_cancelar)
     layout.addLayout(botoes)
 
-    def executar():
-        data_ini = data_ini_input.date().toPyDate()
-        data_fim = data_fim_input.date().toPyDate()
-        nome_produto = produto_input.currentText().strip()
+    def executar() -> None:
+        # QDate -> date
+        data_ini_py = data_ini_input.date().toPyDate()
+        data_fim_py = data_fim_input.date().toPyDate()
+        nome_produto = (produto_input.currentText() or "").strip()
 
-        if data_ini > data_fim:
+        if data_ini_py > data_fim_py:
             QMessageBox.warning(
                 dialog, "Erro", "A data inicial não pode ser posterior à data final."
             )
@@ -2006,9 +2021,13 @@ def iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estad
 
         dialog.accept()
 
+        # Converte para string ISO "YYYY-MM-DD" para casar com a tipagem de executar_busca_produtos
+        data_ini_s = data_ini_py.isoformat()
+        data_fim_s = data_fim_py.isoformat()
+
         executar_busca_produtos(
-            data_ini=data_ini,
-            data_fim=data_fim,
+            data_ini=data_ini_s,
+            data_fim=data_fim_s,
             nome_produto=None if nome_produto == "Todos os produtos" else nome_produto,
             box_nome_input=box_nome_input,
             transportadoras_var=transportadoras_var,
@@ -2023,10 +2042,16 @@ def iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estad
 
 
 def executar_busca_produtos(
-    data_ini, data_fim, nome_produto, box_nome_input, transportadoras_var, estado, skus_info
-):
+    data_ini: str,
+    data_fim: str,
+    nome_produto: str | None,
+    box_nome_input: QComboBox,
+    transportadoras_var: Mapping[str, QCheckBox],
+    estado: MutableMapping[str, Any],
+    skus_info: Mapping[str, Mapping[str, Any]],
+) -> None:
     print(f"[🔎] Iniciando busca de produtos de {data_ini} a {data_fim}")
-    produtos_alvo = {}
+    produtos_alvo: dict[str, Mapping[str, Any]] = {}
 
     # 🎯 Seleciona produtos válidos
     if nome_produto:
@@ -2042,26 +2067,31 @@ def executar_busca_produtos(
             nome: info for nome, info in skus_info.items() if info.get("tipo") != "assinatura"
         }
 
-    produtos_ids = []
+    produtos_ids: list[str] = []
     for info in produtos_alvo.values():
-        produtos_ids.extend(info.get("guru_ids", []))
+        gids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
+        for gid in gids:
+            s = str(gid).strip()
+            if s:
+                produtos_ids.append(s)
 
     if not produtos_ids:
         QMessageBox.warning(None, "Aviso", "Nenhum produto com IDs válidos encontrados.")
         return
 
-    dados = {
-        "modo": "produtos",  # ← AQUI está o ajuste necessário
+    dados: dict[str, Any] = {
+        "modo": "produtos",  # ← ajuste mantido
         "inicio": data_ini,
         "fim": data_fim,
         "produtos_ids": produtos_ids,
-        "box_nome": box_nome_input.currentText().strip(),
+        "box_nome": (box_nome_input.currentText() or "").strip(),
         "transportadoras_permitidas": [
             nome for nome, cb in transportadoras_var.items() if cb.isChecked()
         ],
     }
 
-    if estado.get("worker_thread") and estado["worker_thread"].isRunning():
+    wt = estado.get("worker_thread")
+    if wt is not None and hasattr(wt, "isRunning") and wt.isRunning():
         print("[⚠️] Uma execução já está em andamento.")
         return
 
@@ -2076,12 +2106,12 @@ def executar_busca_produtos(
         estado["cancelador_global"] = threading.Event()
 
     estado["cancelador_global"].clear()
-    estado["dados_busca"] = dados.copy()
+    estado["dados_busca"] = dict(dados)  # cópia simples
 
     print("[🚀 executar_busca_produtos] Enviando para WorkerController...")
 
     try:
-        controller = WorkerController(dados, estado, skus_info)
+        controller = WorkerController(dados, estado, skus_info)  # tipos permanecem aceitos
         estado["worker_controller"] = controller
         controller.iniciar_worker_signal.emit()
     except Exception as e:
@@ -2094,29 +2124,39 @@ def executar_busca_produtos(
         )
 
 
-def buscar_transacoes_produtos(dados, *, atualizar=None, cancelador=None, estado=None):
+def buscar_transacoes_produtos(
+    dados: Mapping[str, Any],
+    *,
+    atualizar: Callable[[str, int, int], Any] | None = None,
+    cancelador: HasIsSet | None = None,
+    estado: MutableMapping[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:  # ← dict no 3º item
     print("[🔍 buscar_transacoes_produtos] Início da função")
 
-    transacoes = []
+    transacoes: list[dict[str, Any]] = []
+    if estado is None:
+        estado = {}
     estado["transacoes_com_erro"] = []
 
     inicio = dados["inicio"]
     fim = dados["fim"]
-    produtos_ids = [pid for pid in dados.get("produtos_ids", []) if pid]
+    produtos_ids: list[str] = [str(pid) for pid in (dados.get("produtos_ids") or []) if pid]
 
     if not produtos_ids:
         print("[⚠️] Nenhum produto selecionado para busca.")
-        return [], {}, dados
+        return [], {}, dict(dados)  # ← CONVERTE
 
-    intervalos = dividir_busca_em_periodos(inicio, fim)
-    tarefas = [(product_id, ini, fim) for product_id in produtos_ids for ini, fim in intervalos]
+    intervalos = cast(list[tuple[str, str]], dividir_busca_em_periodos(inicio, fim))
+    tarefas: list[tuple[str, str, str]] = [
+        (product_id, ini, fim) for product_id in produtos_ids for (ini, fim) in intervalos
+    ]
 
     print(f"[📦] Total de tarefas para produtos: {len(tarefas)}")
 
-    if cancelador.is_set():
+    if cancelador and cancelador.is_set():
         if atualizar:
             atualizar("⛔ Busca cancelada pelo usuário", 1, 1)
-        return [], {}, dados
+        return [], {}, dict(dados)  # ← CONVERTE
 
     with ThreadPoolExecutor(max_workers=12) as executor:
         futures = [
@@ -2127,11 +2167,11 @@ def buscar_transacoes_produtos(dados, *, atualizar=None, cancelador=None, estado
         concluidos = 0
 
         while futures:
-            if cancelador.is_set():
+            if cancelador and cancelador.is_set():
                 print("[🚫] Cancelado durante busca de produtos.")
                 for f in futures:
                     f.cancel()
-                return transacoes, {}, dados
+                return transacoes, {}, dict(dados)  # ← CONVERTE
 
             done, not_done = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
 
@@ -2160,19 +2200,24 @@ def buscar_transacoes_produtos(dados, *, atualizar=None, cancelador=None, estado
                     estado["transacoes_com_erro"].append(erro_msg)
                 concluidos += 1
                 if atualizar:
-                    atualizar("🔄 Coletando transações de produtos...", concluidos, total_futures)
+                    try:
+                        atualizar(
+                            "🔄 Coletando transações de produtos...", concluidos, total_futures
+                        )
+                    except Exception:
+                        pass
 
             futures = list(not_done)
 
     print(f"[✅ buscar_transacoes_produtos] Finalizado - {len(transacoes)} transações coletadas")
-    return transacoes, {}, dados
+    return transacoes, {}, dict(dados)
 
 
 def bimestre_do_mes(mes: int) -> int:
     return 1 + (int(mes) - 1) // 2
 
 
-def bounds_do_periodo(ano: int, mes: int, periodicidade: str):
+def bounds_do_periodo(ano: int, mes: int, periodicidade: str) -> tuple[datetime, datetime, int]:
     periodicidade = (periodicidade or "").strip().lower()
 
     if periodicidade == "mensal":
@@ -2200,7 +2245,6 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
     - Converte TUDO para datetime *aware* (UTC) antes de comparar.
     - Logs defensivos sem referenciar variáveis ainda não definidas.
     """
-    from datetime import datetime  # import local para não poluir topo
 
     def _aware_utc(dt: datetime | None) -> datetime | None:
         if dt is None:
@@ -2301,20 +2345,16 @@ def dentro_periodo_selecionado(dados: dict, data_pedido: datetime) -> bool:
         return False
 
 
-def _carregar_regras(estado):
-    """
-    Retorna a lista de regras ativa.
-    Preferência: estado["rules"]; fallback: ler de config_ofertas.json (se existir).
-    """
+def _carregar_regras(estado: MutableMapping[str, Any]) -> list[dict[str, Any]]:
     if isinstance(estado.get("rules"), list):
-        return estado["rules"]
+        return cast(list[dict[str, Any]], estado["rules"])
 
     # fallback leve (não explode se não houver arquivo)
     try:
         config_path = os.path.join(os.path.dirname(__file__), "config_ofertas.json")
         if os.path.exists(config_path):
             with open(config_path, encoding="utf-8") as f:
-                cfg = json.load(f)
+                cfg: dict[str, Any] = json.load(f)
                 regras = cfg.get("rules") or cfg.get("regras") or []
                 if isinstance(regras, list):
                     # cache no estado p/ próximas chamadas
@@ -2327,24 +2367,24 @@ def _carregar_regras(estado):
 
 
 def iniciar_busca_assinaturas(
-    ano,
-    mes,
-    modo_periodo,
-    box_nome_input,
-    _transportadoras_var,
-    estado,
-    skus_info,
+    ano: int | str,
+    mes: int | str,
+    modo_periodo: str,
+    box_nome_input: QComboBox,
+    _transportadoras_var: Any,
+    estado: MutableMapping[str, Any],
+    skus_info: Mapping[str, Mapping[str, Any]],
     *,
-    periodicidade_selecionada,  # "mensal" | "bimestral"
-):
+    periodicidade_selecionada: str,
+) -> None:
     # normaliza periodicidade
-    periodicidade = (periodicidade_selecionada or "").strip().lower()
+    periodicidade: str = (periodicidade_selecionada or "").strip().lower()
     if periodicidade not in ("mensal", "bimestral"):
         periodicidade = "bimestral"
 
     # calcula janelas do período
     dt_ini, dt_end, periodo = bounds_do_periodo(int(ano), int(mes), periodicidade)
-    box_nome = (box_nome_input.currentText() or "").strip()
+    box_nome: str = (box_nome_input.currentText() or "").strip()
 
     # bloqueia box indisponivel
     if box_nome and eh_indisponivel(box_nome):
@@ -2356,10 +2396,10 @@ def iniciar_busca_assinaturas(
         return
 
     # carrega regras ativas
-    regras = _carregar_regras(estado)
+    regras: list[dict[str, Any]] = _carregar_regras(estado)
 
     # monta o payload de execução (o WorkerThread usa isso direto)
-    dados = {
+    dados: dict[str, Any] = {
         "modo": "assinaturas",
         "ano": int(ano),
         "mes": int(mes),
@@ -2376,7 +2416,7 @@ def iniciar_busca_assinaturas(
 
     # guarda contexto p/ outras partes da UI
     estado["contexto_busca_assinaturas"] = dados
-    estado["skus_info"] = skus_info  # garante acesso dentro do Worker
+    estado["skus_info"] = cast(Mapping[str, Mapping[str, Any]], skus_info)
 
     # ---- dispara em QThread via WorkerController ----
     # garante Event de cancelamento
@@ -2385,7 +2425,8 @@ def iniciar_busca_assinaturas(
     estado["cancelador_global"].clear()
 
     # evita execuções concorrentes
-    if estado.get("worker_thread") and estado["worker_thread"].isRunning():
+    wt = estado.get("worker_thread")
+    if wt is not None and wt.isRunning():
         comunicador_global.mostrar_mensagem.emit(
             "aviso", "Em andamento", "Já existe uma exportação em andamento."
         )
@@ -2400,14 +2441,17 @@ def iniciar_busca_assinaturas(
     # alternativa: controller.iniciar_worker_signal.emit()
 
 
-def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel: str):
+def coletar_ids_assinaturas_por_periodicidade(
+    skus_info: Mapping[str, Mapping[str, Any]],
+    periodicidade_sel: str,
+) -> dict[str, list[str]]:
     """
     Retorna dict com listas de product_ids (Guru) das assinaturas filtradas
     pela periodicidade ('mensal' | 'bimestral').
     Keys: 'anuais', 'bianuais', 'trianuais', 'bimestrais', 'mensais', 'todos'
     """
     periodicidade_sel = (periodicidade_sel or "").strip().lower()
-    mapa_tipo = {
+    mapa_tipo: dict[str, str] = {
         "anual": "anuais",
         "bianual": "bianuais",
         "trianual": "trianuais",
@@ -2418,55 +2462,66 @@ def coletar_ids_assinaturas_por_periodicidade(skus_info: dict, periodicidade_sel
     ids_por_tipo: dict[str, list[str]] = {
         k: [] for k in ["anuais", "bianuais", "trianuais", "bimestrais", "mensais"]
     }
-    todos = set()
+    todos: set[str] = set()
 
-    for _nome, info in (skus_info or {}).items():
-        if (info.get("tipo") or "").lower() != "assinatura":
+    for _nome, info in skus_info.items():
+        if str(info.get("tipo", "")).lower() != "assinatura":
             continue
-        if (info.get("periodicidade") or "").lower() != periodicidade_sel:
+        if str(info.get("periodicidade", "")).lower() != periodicidade_sel:
             continue
 
-        duracao = (info.get("recorrencia") or "").lower()
+        duracao = str(info.get("recorrencia", "")).lower()
         chave_tipo = mapa_tipo.get(duracao)
         if not chave_tipo:
             continue
 
-        for gid in info.get("guru_ids", []):
+        guru_ids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
+        for gid in guru_ids:
             gid_str = str(gid).strip()
             if gid_str:
                 ids_por_tipo[chave_tipo].append(gid_str)
                 todos.add(gid_str)
 
     # dedup
-    for k in ids_por_tipo:
+    for k in list(ids_por_tipo.keys()):
         ids_por_tipo[k] = list(dict.fromkeys(ids_por_tipo[k]))
     ids_por_tipo["todos"] = list(todos)
     return ids_por_tipo
 
 
-def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, estado=None):
+def buscar_transacoes_assinaturas(
+    dados: dict[str, Any],
+    *,
+    atualizar: Callable[[str, int, int], Any] | None = None,
+    cancelador: HasIsSet | None = None,
+    estado: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     print("[🔍 buscar_transacoes_assinaturas] Início da função")
 
-    from datetime import datetime  # imports locais p/ não depender do topo
-
-    transacoes = []
+    transacoes: list[dict[str, Any]] = []
     if estado is None:
         estado = {}
     estado["transacoes_com_erro"] = []
 
     # ⚙️ contexto
-    periodicidade_sel = (
-        (dados.get("periodicidade") or dados.get("periodicidade_selecionada") or "").strip().lower()
+    periodicidade_sel: str = (
+        (str(dados.get("periodicidade") or dados.get("periodicidade_selecionada") or ""))
+        .strip()
+        .lower()
     )
     if periodicidade_sel not in ("mensal", "bimestral"):
         periodicidade_sel = "bimestral"
 
     # garanta que o mapeamento está no estado
-    estado.setdefault("skus_info", estado.get("skus_info", {}))
-    skus_info = estado.get("skus_info", {})
+    estado.setdefault("skus_info", {})
+    skus_info: dict[str, dict[str, Any]] = cast(
+        dict[str, dict[str, Any]], estado.get("skus_info", {})
+    )
 
     # ✅ IDs por periodicidade a partir do SKUs.json
-    ids_map = coletar_ids_assinaturas_por_periodicidade(skus_info, periodicidade_sel)
+    ids_map: dict[str, list[str]] = coletar_ids_assinaturas_por_periodicidade(
+        skus_info, periodicidade_sel
+    )
     dados["ids_planos_todos"] = ids_map.get("todos", [])
 
     # 🗓 período indicado na UI
@@ -2502,20 +2557,20 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
 
     # ================= Constrói intervalos =================
     # Observação: dividir_busca_em_periodos aceita date/datetime e retorna ("YYYY-MM-DD","YYYY-MM-DD")
-    intervalos_mensais = (
+    intervalos_mensais: list[tuple[str, str]] = (
         dividir_busca_em_periodos(ini_sel, end_sel) if periodicidade_sel == "mensal" else []
     )
-    intervalos_bimestrais = (
+    intervalos_bimestrais: list[tuple[str, str]] = (
         dividir_busca_em_periodos(ini_sel, end_sel) if periodicidade_sel == "bimestral" else []
     )
 
     # Multi-ano: início = (primeiro dia do mês seguinte ao fim selecionado) - N anos, limitado por LIMITE_INFERIOR
     inicio_base = _first_day_next_month(end_sel)
 
-    def _janela_multi_ano(n_anos: int):
+    def _janela_multi_ano(n_anos: int) -> list[tuple[str, str]]:
         ini = datetime(inicio_base.year - n_anos, inicio_base.month, 1, tzinfo=UTC)
         ini = max(ini, LIMITE_INFERIOR)
-        return dividir_busca_em_periodos(ini, end_sel)
+        return cast(list[tuple[str, str]], dividir_busca_em_periodos(ini, end_sel))
 
     # ================= Modo do período (PERÍODO vs TODAS) =================
     try:
@@ -2540,8 +2595,11 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         intervalos_trianuais = _janela_multi_ano(3)
 
     # ================= Executor =================
-    def executar_lote(tarefas, label_progresso):
-        # FIX (2): evita crash quando não há tarefas
+
+    def executar_lote(
+        tarefas: Sequence[tuple[str, str, str, str]],
+        label_progresso: str,
+    ) -> bool:
         if not tarefas:
             return True
         max_workers = min(12, len(tarefas))
@@ -2568,7 +2626,7 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
                 for future in done:
                     try:
                         resultado = future.result()
-                        transacoes.extend(resultado)
+                        transacoes.extend(cast(list[dict[str, Any]], resultado))
                     except Exception as e:
                         erro_msg = f"Erro ao buscar transações ({label_progresso}): {e!s}"
                         print(f"❌ {erro_msg}")
@@ -2584,15 +2642,14 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         return True
 
     # ================= Tarefas (AGREGADAS) =================
-    todas_tarefas = []
+    todas_tarefas: list[tuple[str, str, str, str]] = []
 
     print("[1️⃣] Gerando tarefas para anuais...")
-    t = [
+    t: list[tuple[str, str, str, str]] = [
         (pid, ini, fim, "anuais")
         for pid in ids_map.get("anuais", [])
         for (ini, fim) in intervalos_anuais
     ]
-    print(f"[📦] Total de tarefas anuais: {len(t)}")
     todas_tarefas.extend(t)
 
     print("[1.1️⃣] Gerando tarefas para bianuais...")
@@ -2601,7 +2658,6 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         for pid in ids_map.get("bianuais", [])
         for (ini, fim) in intervalos_bianuais
     ]
-    print(f"[📦] Total de tarefas bianuais: {len(t)}")
     todas_tarefas.extend(t)
 
     print("[1.2️⃣] Gerando tarefas para trianuais...")
@@ -2610,7 +2666,6 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         for pid in ids_map.get("trianuais", [])
         for (ini, fim) in intervalos_trianuais
     ]
-    print(f"[📦] Total de tarefas trianuais: {len(t)}")
     todas_tarefas.extend(t)
 
     print("[2️⃣] Gerando tarefas para bimestrais...]")
@@ -2619,7 +2674,6 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         for pid in ids_map.get("bimestrais", [])
         for (ini, fim) in intervalos_bimestrais
     ]
-    print(f"[📦] Total de tarefas bimestrais: {len(t)}")
     todas_tarefas.extend(t)
 
     print("[3️⃣] Gerando tarefas para mensais...")
@@ -2628,7 +2682,6 @@ def buscar_transacoes_assinaturas(dados, *, atualizar=None, cancelador=None, est
         for pid in ids_map.get("mensais", [])
         for (ini, fim) in intervalos_mensais
     ]
-    print(f"[📦] Total de tarefas mensais: {len(t)}")
     todas_tarefas.extend(t)
 
     # ---- executa tudo de uma vez no mesmo pool ----
@@ -2656,15 +2709,15 @@ class TransientGuruError(Exception):
 
 
 def buscar_transacoes_individuais(
-    product_id,
-    inicio,
-    fim,
+    product_id: str,
+    inicio: str,
+    fim: str,
     *,
-    cancelador=None,
-    tipo_assinatura=None,
-    timeout=(3, 15),  # (connect, read)
-    max_page_retries=2,  # tentativas por página
-):
+    cancelador: HasIsSet | None = None,
+    tipo_assinatura: str | None = None,
+    timeout: tuple[float, float] = (3.0, 15.0),  # (connect, read)
+    max_page_retries: int = 2,  # tentativas por página
+) -> list[dict[str, Any]]:
     if cancelador and cancelador.is_set():
         print("[🚫] Cancelado no início de buscar_transacoes_individuais")
         return []
@@ -2673,8 +2726,8 @@ def buscar_transacoes_individuais(
         f"[🔎 buscar_transacoes_individuais] Início - Produto: {product_id}, Período: {inicio} → {fim}"
     )
 
-    resultado = []
-    cursor = None
+    resultado: list[dict[str, Any]] = []
+    cursor: str | None = None
     pagina_count = 0
     total_transacoes = 0
     erro_final = False
@@ -2686,7 +2739,7 @@ def buscar_transacoes_individuais(
             print("[🚫] Cancelado no meio da busca individual")
             break
 
-        params = {
+        params: dict[str, Any] = {
             "transaction_status[]": ["approved"],
             "ordered_at_ini": inicio,
             "ordered_at_end": fim,
@@ -2695,8 +2748,8 @@ def buscar_transacoes_individuais(
         if cursor:
             params["cursor"] = cursor
 
-        data = None
-        last_exc = None
+        data: Mapping[str, Any] | None = None
+        last_exc: Exception | None = None
 
         # === tentativas por página ===
         for tentativa in range(max_page_retries + 1):
@@ -2704,7 +2757,7 @@ def buscar_transacoes_individuais(
                 print("[🚫] Cancelado durante tentativa de página")
                 break
             try:
-                r = session.get(
+                r: requests.Response = session.get(
                     f"{BASE_URL_GURU}/transactions",
                     headers=HEADERS_GURU,
                     params=params,
@@ -2712,7 +2765,7 @@ def buscar_transacoes_individuais(
                 )
                 if r.status_code != 200:
                     raise requests.HTTPError(f"HTTP {r.status_code}")
-                data = r.json()
+                data = cast(Mapping[str, Any], r.json())
                 break  # sucesso
             except Exception as e:
                 last_exc = e
@@ -2739,7 +2792,7 @@ def buscar_transacoes_individuais(
                 erro_final = True
                 break
 
-        pagina = data.get("data", []) or []
+        pagina = cast(list[dict[str, Any]], data.get("data", []) or [])
         print(f"[📄 Página {pagina_count+1}] {len(pagina)} assinaturas encontradas")
 
         for t in pagina:
@@ -2752,7 +2805,7 @@ def buscar_transacoes_individuais(
 
         total_transacoes += len(pagina)
         pagina_count += 1
-        cursor = data.get("next_cursor")
+        cursor = cast(str | None, data.get("next_cursor"))
         if not cursor:
             break
 
@@ -2763,13 +2816,19 @@ def buscar_transacoes_individuais(
     return resultado
 
 
-def buscar_transacoes_com_retry(*args, cancelador=None, tentativas=3, **kwargs):
+def buscar_transacoes_com_retry(
+    *args: Any,
+    cancelador: Any = None,
+    tentativas: int = 3,
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     for tentativa in range(tentativas):
         if cancelador and cancelador.is_set():
             print("[🚫] Cancelado dentro de buscar_transacoes_com_retry.")
             return []
         try:
-            return buscar_transacoes_individuais(*args, cancelador=cancelador, **kwargs)
+            resultado = buscar_transacoes_individuais(*args, cancelador=cancelador, **kwargs)
+            return cast(list[dict[str, Any]], resultado)  # ⬅️ evita "no-any-return"
         except TransientGuruError as e:
             print(f"[⚠️ Retry {tentativa+1}/{tentativas}] {e}")
             if tentativa < tentativas - 1:
@@ -2778,6 +2837,7 @@ def buscar_transacoes_com_retry(*args, cancelador=None, tentativas=3, **kwargs):
             else:
                 print("[❌] Falhou após retries; retornando vazio.")
                 return []
+    return []
 
 
 # Funções auxiliares DMG
@@ -2785,11 +2845,11 @@ def buscar_transacoes_com_retry(*args, cancelador=None, tentativas=3, **kwargs):
 # ===== Regras (config_ofertas.json) =====
 
 
-def _caminho_config_ofertas():
+def _caminho_config_ofertas() -> str:
     return os.path.join(os.path.dirname(__file__), "config_ofertas.json")
 
 
-def _ler_json_seguro(path, default):
+def _ler_json_seguro(path: str, default: Any) -> Any:
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return default
     try:
@@ -2800,23 +2860,27 @@ def _ler_json_seguro(path, default):
 
 
 # === Canoniza: sempre expor/salvar em "rules", mas aceitar "regras" legado ===
-def _normalizar_cfg(cfg: dict) -> dict:
-    cfg = cfg or {}
+class RegrasConfig(TypedDict):
+    rules: list[dict[str, Any]]
+
+
+def _normalizar_cfg(cfg: Mapping[str, Any]) -> RegrasConfig:
+    cfg = dict(cfg or {})  # tolera objetos Mapping
     rules = cfg.get("rules")
     if rules is None:
         rules = cfg.get("regras")  # legado
     if not isinstance(rules, list):
         rules = []
-    return {"rules": rules}
+    return {"rules": cast(list[dict[str, Any]], rules)}
 
 
-def carregar_config_ofertas():
+def carregar_config_ofertas() -> RegrasConfig:
     path = _caminho_config_ofertas()
-    cfg = _ler_json_seguro(path, {"rules": []})
-    return _normalizar_cfg(cfg)
+    raw: Mapping[str, Any] = _ler_json_seguro(path, {"rules": []})
+    return _normalizar_cfg(raw)
 
 
-def salvar_config_ofertas(cfg: dict):
+def salvar_config_ofertas(cfg: Mapping[str, Any]) -> None:
     path = _caminho_config_ofertas()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     cfg_norm = _normalizar_cfg(cfg)
@@ -2824,40 +2888,39 @@ def salvar_config_ofertas(cfg: dict):
         json.dump(cfg_norm, f, indent=2, ensure_ascii=False)
 
 
-def carregar_regras(config_path=None):
+def carregar_regras(config_path: str | None = None) -> list[dict[str, Any]]:
     path = config_path or _caminho_config_ofertas()
-    data = _ler_json_seguro(path, {"rules": []})
-    return _normalizar_cfg(data)["rules"]
+    data: Mapping[str, Any] = _ler_json_seguro(path, {"rules": []})
+    return cast(list[dict[str, Any]], _normalizar_cfg(data)["rules"])
 
 
-def salvar_regras(config_path, rules):
+def salvar_regras(config_path: str, rules: Sequence[Mapping[str, Any]] | None) -> None:
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump({"rules": rules or []}, f, indent=2, ensure_ascii=False)
+        json.dump({"rules": list(rules or [])}, f, indent=2, ensure_ascii=False)
 
 
 # Use o mesmo caminho e normalize ao ler
-def obter_regras_config(path=None):
+def obter_regras_config(path: str | None = None) -> list[dict[str, Any]]:
     path = path or _caminho_config_ofertas()
     try:
         with open(path, encoding="utf-8") as f:
-            cfg = json.load(f)
+            cfg: dict[str, Any] = json.load(f)
     except FileNotFoundError:
         print(f"[⚠️] {path} não encontrado")
         return []
     except Exception as e:
         print(f"[⚠️ ERRO ao ler {path}]: {e}")
         return []
-    return _normalizar_cfg(cfg)["rules"]
+    return cast(list[dict[str, Any]], _normalizar_cfg(cfg)["rules"])
 
 
 # Passe a escrever em "rules" e a usar as chaves do seu JSON atual: applies_to/action/cupom
-def adicionar_regra_config(regra: dict):
+def adicionar_regra_config(regra: dict[str, Any]) -> None:
     cfg = carregar_config_ofertas()
-    rules = list(cfg.get("rules") or [])
+    rules: list[dict[str, Any]] = list(cfg.get("rules") or [])
 
-    # dedup por conteúdo
-    def _canon(r):
+    def _canon(r: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "applies_to": r.get("applies_to"),
             "cupom": r.get("cupom"),
@@ -2879,13 +2942,13 @@ def adicionar_regra_config(regra: dict):
     salvar_config_ofertas({"rules": rules})
 
 
-def remover_regra_config(regra_id: str):
+def remover_regra_config(regra_id: str) -> None:
     cfg = carregar_config_ofertas()
     rules = [r for r in (cfg.get("rules") or []) if r.get("id") != regra_id]
     salvar_config_ofertas({"rules": rules})
 
 
-def formatar_valor(valor):
+def formatar_valor(valor: float) -> str:
     return f"{valor:.2f}".replace(".", ",")
 
 
@@ -2933,48 +2996,71 @@ def recebe_box_do_periodo(
     return inicio <= dc <= fim
 
 
-def configurar_cancelamento_em_janela(janela, cancelador):
-    def ao_fechar(event):
-        if hasattr(cancelador, "set"):
-            cancelador.set()
-        event.accept()
-
-    janela.closeEvent = ao_fechar
+class CanceladorLike(Protocol):
+    def set(self) -> Any: ...
 
 
-def eh_indisponivel(produto_nome: str) -> bool:
-    """
-    Compat: mantém o nome antigo, mas agora retorna True
-    se o produto estiver marcado como indisponivel no skus.json.
-    """
-    if not produto_nome:
+class _CancelamentoFilter(QObject):
+    def __init__(self, cancelador: CanceladorLike, parent: QObject) -> None:
+        super().__init__(parent)
+        self._cancelador = cancelador
+
+    def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Close:
+            # QEvent.Close é sempre QCloseEvent em widgets de janela
+            if hasattr(self._cancelador, "set"):
+                self._cancelador.set()
+            # Não bloqueia o fechamento
+            return False
         return False
 
-    skus = cast(dict[str, dict[str, Any]], estado.get("skus_info") or {})
-    info = skus.get(produto_nome)
 
-    # fallback por normalização de nome (sem acento/caixa) caso a chave não bata 1:1
-    if info is None:
+def configurar_cancelamento_em_janela(janela: QObject, cancelador: CanceladorLike) -> None:
+    filtro = _CancelamentoFilter(cancelador, janela)  # parent=janela
+    janela.installEventFilter(filtro)
+
+
+def eh_indisponivel(produto_nome: str, *, sku: str | None = None) -> bool:
+    if not produto_nome and not sku:
+        return False
+
+    # estado["skus_info"] pode vir sem tipo -> cast para Mapping esperado
+    skus: Mapping[str, Mapping[str, Any]] = cast(
+        Mapping[str, Mapping[str, Any]], estado.get("skus_info") or {}
+    )
+    info: Mapping[str, Any] | None = skus.get(produto_nome)
+
+    # fallback por normalização do nome
+    if info is None and produto_nome:
         alvo = unidecode(str(produto_nome)).lower().strip()
         for nome, i in skus.items():
             if unidecode(nome).lower().strip() == alvo:
                 info = i
                 break
 
+    # NOVO: se não achou por nome, tenta por SKU
+    if info is None and sku:
+        sku_norm = (sku or "").strip().upper()
+        for i in skus.values():
+            if str(i.get("sku", "")).strip().upper() == sku_norm:
+                info = i
+                break
+
     return bool(info and info.get("indisponivel", False))
 
 
-def normalizar(texto):
-    texto = unicodedata.normalize("NFD", texto)
-    texto = texto.encode("ascii", "ignore").decode("utf-8")
-    return texto.lower()
+def normalizar(texto: Any) -> str:
+    s = str(texto or "")
+    s = unicodedata.normalize("NFD", s)
+    s = s.encode("ascii", "ignore").decode("utf-8")
+    return s.lower()
 
 
-def encontrar_nome_padrao(nome_busca, skus_info):
+def encontrar_nome_padrao(nome_busca: str, skus_info: Mapping[str, Any]) -> str | None:
     nome_norm = normalizar(nome_busca)
     for nome_padrao in skus_info:
         if normalizar(nome_padrao) in nome_norm:
-            return nome_padrao
+            return str(nome_padrao)
     return None
 
 
@@ -2982,8 +3068,13 @@ def encontrar_nome_padrao(nome_busca, skus_info):
 
 
 def gerar_linha_base(
-    contact, valores, transacao, tipo_plano="", subscription_id="", cupom_valido=""
-):
+    contact: Mapping[str, Any],
+    valores: Mapping[str, Any],
+    transacao: Mapping[str, Any],
+    tipo_plano: str = "",
+    subscription_id: str = "",
+    cupom_valido: str = "",
+) -> dict[str, Any]:
     telefone = contact.get("phone_number", "")
     return {
         # Comprador
@@ -3039,29 +3130,34 @@ def gerar_linha_base(
     }
 
 
-def desmembrar_produto_combo(valores, linha_base, skus_info):
+def desmembrar_produto_combo(
+    valores: Mapping[str, Any],
+    linha_base: dict[str, Any],
+    skus_info: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     """
     - valores["produto_principal"] = nome do combo
     - valores["valor_total"]       = total do combo (float/int ou string com vírgula)
     - skus_info[nome_combo]["composto_de"] = [SKUs...]
     - skus_info[produto_simples]["sku"] = SKU do produto simples
     """
-    nome_combo = valores.get("produto_principal", "")
-    info_combo = skus_info.get(nome_combo, {})
-    skus_componentes = [s for s in info_combo.get("composto_de", []) if str(s).strip()]
+    nome_combo: str = str(valores.get("produto_principal", ""))
+    info_combo: Mapping[str, Any] = skus_info.get(nome_combo, {})
+    skus_componentes: list[str] = [
+        str(s).strip() for s in (info_combo.get("composto_de", []) or []) if str(s).strip()
+    ]
 
     # Se não há componentes, retorna a linha original
     if not skus_componentes:
         return [linha_base]
 
     # Helper: parse total (aceita 12,34 / 12.34 / 1.234,56)
-    def _to_dec(v):
+    def _to_dec(v: Any) -> Decimal:
         if v is None:
             return Decimal("0.00")
         if isinstance(v, int | float):
             return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         s = str(v).strip()
-        # normaliza "1.234,56" -> "1234.56"
         s = s.replace(".", "").replace(",", ".")
         try:
             return Decimal(s).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -3076,7 +3172,8 @@ def desmembrar_produto_combo(valores, linha_base, skus_info):
         linhas = []
         for sku in skus_componentes:
             nome_item = next(
-                (nome for nome, info in skus_info.items() if info.get("sku") == sku), sku
+                (nome for nome, info in skus_info.items() if str(info.get("sku", "")) == sku),
+                sku,
             )
             nova = linha_base.copy()
             nova["Produto"] = nome_item
@@ -3084,7 +3181,7 @@ def desmembrar_produto_combo(valores, linha_base, skus_info):
             nova["Valor Unitário"] = "0,00"
             nova["Valor Total"] = "0,00"
             nova["Combo"] = nome_combo  # remova se não quiser essa coluna
-            nova["indisponivel"] = "S" if eh_indisponivel(nome_item) else ""
+            nova["indisponivel"] = "S" if eh_indisponivel(nome_item, sku=sku) else ""
             linhas.append(nova)
         return linhas
 
@@ -3111,7 +3208,15 @@ def desmembrar_produto_combo(valores, linha_base, skus_info):
     return linhas
 
 
-def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador, estado):
+def processar_planilha(
+    transacoes: Sequence[Mapping[str, Any] | Sequence[Mapping[str, Any]]],
+    dados: Mapping[str, Any],
+    atualizar_etapa: Callable[[str, int, int], Any] | None,
+    skus_info: Mapping[str, Mapping[str, Any]],
+    cancelador: HasIsSet,
+    estado: MutableMapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, int]]]:
+
     estado.setdefault("df_planilha_parcial", pd.DataFrame())
     estado.setdefault("mapa_transaction_id_por_linha", {})
     estado.setdefault("brindes_indisp_set", set())
@@ -3147,28 +3252,29 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
         return aliases.get(t, "bimestrais")  # fallback seguro
 
     # helper: append + mapeamento transaction_id
-    def _append_linha(linha, transaction_id):
+    def _append_linha(linha: dict[str, Any], transaction_id: str) -> None:
         linhas_planilha.append(linha)
         estado["mapa_transaction_id_por_linha"][offset + len(linhas_planilha) - 1] = transaction_id
 
     # helper: flag de indisponível
-    def _flag_indisp(nome):
+    def _flag_indisp(nome: str, sku: str | None = None) -> str:
         try:
-            return "S" if eh_indisponivel(nome) else ""
+            return "S" if eh_indisponivel(nome, sku=sku) else ""
         except Exception:
             return ""
 
     # helper: janela segura (não explode se faltar ano/mês/ini/end)
-    def _aplica_janela(dados_local, dt):
+    def _aplica_janela(dados_local: Mapping[str, Any], dt: datetime) -> bool:
         try:
-            return dentro_periodo_selecionado(dados_local, dt)
+            # dentro_periodo_selecionado espera dict[Any, Any]
+            return bool(dentro_periodo_selecionado(cast(dict[Any, Any], dados_local), dt))
         except Exception as e:
             print(f"[DEBUG janela-skip] Ignorando janela por falta de contexto: {e}")
             # Sem contexto de período → NÃO aplica regras
             return False
 
     # helper: normaliza para timestamp
-    def _to_ts(val):
+    def _to_ts(val: Any) -> float | None:
         """
         Converte val -> timestamp (segundos desde epoch, UTC).
         Aceita:
@@ -3181,28 +3287,24 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
         if val is None:
             return None
 
-        # numérico: suporta ms
         if isinstance(val, int | float):
             v = float(val)
             if v > 1e12:  # ms -> s
                 v /= 1000.0
             return v
 
-        # datetime
         if isinstance(val, datetime):
             dt = val if val.tzinfo else val.replace(tzinfo=UTC)
             return dt.timestamp()
 
-        # QDateTime / similares
         if hasattr(val, "toPyDateTime"):
             try:
-                dt = val.toPyDateTime()
+                dt = cast(datetime, val.toPyDateTime())
                 dt = dt if dt.tzinfo else dt.replace(tzinfo=UTC)
                 return dt.timestamp()
             except Exception:
                 return None
 
-        # string -> datetime via parse_date
         if isinstance(val, str):
             try:
                 dt = parse_date(val)
@@ -3234,7 +3336,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
     transacoes = transacoes_corrigidas
     total_transacoes = len(transacoes)
 
-    ids_planos_validos = dados.get("ids_planos_todos", [])
+    ids_planos_validos: Sequence[str] = cast(Sequence[str], dados.get("ids_planos_todos", []))
     modo = (dados.get("modo", "assinaturas") or "").strip().lower()
     ofertas_embutidas = dados.get("ofertas_embutidas", {}) or {}
     modo_periodo_sel = (dados.get("modo_periodo") or "").strip().upper()
@@ -3242,7 +3344,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
         f"[DEBUG processar_planilha] Iniciando processamento: total_transacoes={len(transacoes)} modo={modo} modo_periodo={modo_periodo_sel}"
     )
 
-    def is_transacao_principal(trans, ids_validos):
+    def is_transacao_principal(trans: Mapping[str, Any], ids_validos: Sequence[str]) -> bool:
         pid = trans.get("product", {}).get("internal_id", "")
         is_bump = bool(trans.get("is_order_bump", 0))
         return pid in ids_validos and not is_bump
@@ -3257,7 +3359,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                 return [], contagem
             try:
                 valores = calcular_valores_pedido(
-                    transacao, dados, skus_info, usar_valor_fixo=False
+                    transacao, dados, cast(Mapping[str, SKUInfo], skus_info), usar_valor_fixo=False
                 )
                 if not valores or not isinstance(valores, dict):
                     raise ValueError("[⚠️ calcular_valores_pedido retornou None/ inválido]")
@@ -3283,7 +3385,9 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                         "SKU": sku_produto,
                         "Valor Unitário": formatar_valor(valores["valor_unitario"]),
                         "Valor Total": formatar_valor(valores["valor_total"]),
-                        "indisponivel": _flag_indisp(nome_produto),
+                        "indisponivel": (
+                            "S" if eh_indisponivel(nome_produto, sku=sku_produto) else "N"
+                        ),
                     }
                 )
 
@@ -3292,11 +3396,29 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                 )
 
                 if info_combo.get("composto_de"):
-                    for linha_item in desmembrar_produto_combo(valores, linha_base, skus_info):
-                        linha_item["indisponivel"] = _flag_indisp(linha_item.get("Produto", ""))
-                        _append_linha(linha_item, valores["transaction_id"])
+                    mapeado = bool(info_combo.get("guru_ids")) and bool(
+                        info_combo.get("shopify_ids")
+                    )
+                    indisponivel_combo = eh_indisponivel(nome_produto, sku=sku_produto)
+
+                    # 🚫 regra: combo indisponível + mapeado → não desmembrar
+                    if indisponivel_combo and mapeado:
+                        linha_base["indisponivel"] = "S"
+                        _append_linha(linha_base, valores["transaction_id"])
+                    else:
+                        for linha_item in desmembrar_produto_combo(valores, linha_base, skus_info):
+                            linha_item["indisponivel"] = (
+                                "S"
+                                if eh_indisponivel(
+                                    str(linha_item.get("Produto") or ""),
+                                    sku=str(linha_item.get("SKU") or ""),
+                                )
+                                else "N"
+                            )
+                            _append_linha(linha_item, valores["transaction_id"])
                 else:
                     _append_linha(linha_base, valores["transaction_id"])
+
             except Exception as e:
                 print(f"[❌ ERRO] Transação {transacao.get('id')}: {e}")
                 traceback.print_exc()
@@ -3325,9 +3447,9 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
             if cancelador.is_set():
                 return [], contagem
 
-            def safe_parse_date(t):
+            def safe_parse_date(t: Mapping[str, Any]) -> datetime:
                 try:
-                    s = t.get("ordered_at") or t.get("created_at") or "1900-01-01"
+                    s = str(t.get("ordered_at") or t.get("created_at") or "1900-01-01")
                     dt = parse_date(s)
                     # Normaliza para UTC aware
                     return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
@@ -3377,7 +3499,9 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
             transacao["subscription"] = {"id": subscription_id}
 
             # 👇 garante o dict e só copia offer se existir no base
-            product_base = transacao_base.get("product") or {}
+            product_base = cast(
+                Mapping[str, Any], transacao_base.get("product", cast(Mapping[str, Any], {}))
+            )
             transacao.setdefault("product", {})
             if "offer" not in transacao["product"] and product_base.get("offer"):
                 transacao["product"]["offer"] = product_base["offer"]
@@ -3387,7 +3511,10 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                     f"[DEBUG calcular_valores_pedido] subscription_id={subscription_id} transacao_id={transacao.get('id')} ordered_at={transacao.get('ordered_at')} created_at={transacao.get('created_at')}"
                 )
                 valores = calcular_valores_pedido(
-                    transacao, dados, skus_info, usar_valor_fixo=usar_valor_fixo
+                    transacao,
+                    dados,
+                    cast(Mapping[str, SKUInfo], skus_info),
+                    usar_valor_fixo=usar_valor_fixo,
                 )
                 if not isinstance(valores, dict) or not valores.get("transaction_id"):
                     raise ValueError(f"Valores inválidos retornados: {valores}")
@@ -3433,10 +3560,12 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                 linha["Valor Unitário"] = formatar_valor(valores["valor_unitario"])
                 linha["Valor Total"] = formatar_valor(valores["valor_total"])
                 linha["periodicidade"] = periodicidade_atual
-                linha["indisponivel"] = _flag_indisp(nome_produto_principal)
+                linha["indisponivel"] = _flag_indisp(
+                    nome_produto_principal, skus_info.get(nome_produto_principal, {}).get("sku", "")
+                )
 
                 # período
-                def calcular_periodo(periodicidade, data_ref):
+                def calcular_periodo(periodicidade: str, data_ref: datetime) -> int | str:
                     if periodicidade == "mensal":
                         return data_ref.month
                     elif periodicidade == "bimestral":
@@ -3461,7 +3590,16 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                     valores["brindes_extras"] = []
 
                 # 🎁 brindes extras (somente dentro da janela)
-                for brinde_nome in valores.get("brindes_extras") or []:
+                for br in valores.get("brindes_extras") or []:
+                    # normaliza: aceita dict {"nome": "..."} ou string direta
+                    if isinstance(br, dict):
+                        brinde_nome = str(br.get("nome", "")).strip()
+                    else:
+                        brinde_nome = str(br).strip()
+
+                    if not brinde_nome:
+                        continue
+
                     sku_b = skus_info.get(brinde_nome, {}).get("sku", "")
                     linha_b = linha.copy()
                     linha_b.update(
@@ -3470,7 +3608,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                             "SKU": sku_b,
                             "Valor Unitário": "0,00",
                             "Valor Total": "0,00",
-                            "indisponivel": _flag_indisp(brinde_nome),
+                            "indisponivel": _flag_indisp(brinde_nome, sku_b),
                             "subscription_id": subscription_id,  # garante nas derivadas
                         }
                     )
@@ -3482,7 +3620,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                 oferta_id = transacao.get("product", {}).get("offer", {}).get("id")
                 oferta_id_clean = str(oferta_id).strip()
                 ofertas_normalizadas = {str(k).strip(): v for k, v in ofertas_embutidas.items()}
-                nome_embutido_oferta = ofertas_normalizadas.get(oferta_id_clean)
+                nome_embutido_oferta = str(ofertas_normalizadas.get(oferta_id_clean) or "")
 
                 data_pedido_ts = _to_ts(data_pedido)
                 ini_ts = _to_ts(dados.get("embutido_ini_ts"))
@@ -3504,7 +3642,7 @@ def processar_planilha(transacoes, dados, atualizar_etapa, skus_info, cancelador
                             "SKU": sku_embutido,
                             "Valor Unitário": "0,00",
                             "Valor Total": "0,00",
-                            "indisponivel": _flag_indisp(nome_embutido_oferta),
+                            "indisponivel": _flag_indisp(nome_embutido_oferta, sku_embutido),
                             "subscription_id": subscription_id,
                         }
                     )
@@ -3603,63 +3741,71 @@ def _norm(s: str) -> str:
     return unidecode((s or "").strip().lower())
 
 
+class RegrasAplicadas(TypedDict, total=False):
+    override_box: str | None
+    brindes_extra: list[dict[str, Any]]
+
+
 def aplicar_regras_transaction(
-    transacao: dict, dados: dict, _skus_info: dict, base_produto_principal: str
-):
+    transacao: Mapping[str, Any],
+    dados: Mapping[str, Any],
+    _skus_info: Mapping[str, Any],
+    base_produto_principal: str,
+) -> RegrasAplicadas:
     """
     Lê config_ofertas.json e aplica:
       - override da box (action.type == 'alterar_box')
       - brindes extras (action.type == 'adicionar_brindes')
+
     Compatível com rótulos do JSON como:
-      "Assinatura 2 anos (bimestral)", "Assinatura Anual (mensal)", "Assinatura Bimestral (bimestral)" etc.
+      "Assinatura 2 anos (bimestral)", "Assinatura Anual (mensal)",
+      "Assinatura Bimestral (bimestral)" etc.
     Sem mudar o JSON.
     """
-    regras = obter_regras_config() or []
-    res_override = None
-    res_override_score = -1
-    brindes: list[dict[str, Any] | str] = []
+    regras: Sequence[Mapping[str, Any]] = obter_regras_config() or []
+    res_override: str | None = None
+    res_override_score: int = -1
+    brindes_raw: list[dict[str, Any] | str] = []
 
     # --- contexto da transação ---
-    payment = transacao.get("payment") or {}
-    coupon = payment.get("coupon") or {}
-    coupon_code_norm = _norm(coupon.get("coupon_code") or "")
+    payment: Mapping[str, Any] = transacao.get("payment") or {}
+    coupon: Mapping[str, Any] = payment.get("coupon") or {}
+    coupon_code_norm: str = _norm(str(coupon.get("coupon_code") or ""))
 
-    tipo_ass = (
-        (transacao.get("tipo_assinatura") or "").strip().lower()
-    )  # anuais, bianuais, trianuais, bimestrais, mensais
-    periodicidade = (
-        (dados.get("periodicidade_selecionada") or dados.get("periodicidade") or "").strip().lower()
+    tipo_ass: str = (
+        str(transacao.get("tipo_assinatura") or "").strip().lower()
+    )  # anuais, bianuais, ...
+    periodicidade: str = (
+        str(dados.get("periodicidade_selecionada") or dados.get("periodicidade") or "")
+        .strip()
+        .lower()
     )
 
     # Mapeia tipo_ass + periodicidade -> rótulos usados no JSON
-    def _labels_assinatura(tipo_ass: str, periodicidade: str) -> set[str]:
+    def _labels_assinatura(tipo: str, per: str) -> set[str]:
         # exemplos no JSON:
         # "Assinatura 2 anos (bimestral)", "Assinatura 3 anos (mensal)",
         # "Assinatura Anual (bimestral)", "Assinatura Bimestral (bimestral)"
-        base = []
-        if tipo_ass == "bianuais":
+        base: list[str] = []
+        if tipo == "bianuais":
             base.append("Assinatura 2 anos")
-        elif tipo_ass == "trianuais":
+        elif tipo == "trianuais":
             base.append("Assinatura 3 anos")
-        elif tipo_ass == "anuais":
+        elif tipo == "anuais":
             base.append("Assinatura Anual")
-        elif tipo_ass == "bimestrais":
+        elif tipo == "bimestrais":
             base.append("Assinatura Bimestral")
-        elif tipo_ass == "mensais":
+        elif tipo == "mensais":
             base.append("Assinatura Mensal")
-        # anexa a periodicidade entre parênteses se existir
-        out = set()
+        out: set[str] = set()
         for b in base or ["Assinatura"]:
-            if periodicidade:
-                out.add(f"{b} ({periodicidade})")
-            else:
-                out.add(b)
+            out.add(f"{b} ({per})" if per else b)
         return {_norm(x) for x in out}
 
-    labels_alvo = _labels_assinatura(tipo_ass, periodicidade)
-    base_prod_norm = _norm(base_produto_principal)
+    labels_alvo: set[str] = _labels_assinatura(tipo_ass, periodicidade)
+    base_prod_norm: str = _norm(base_produto_principal)
 
-    def _assinatura_match(lista: list[str] | None) -> tuple[bool, int]:
+    def _assinatura_match(lista: Sequence[str] | None) -> tuple[bool, int]:
         """
         Retorna (casou?, score). Score maior = mais específico.
         Regras:
@@ -3674,34 +3820,30 @@ def aplicar_regras_transaction(
         tokens_genericos = {"anual", "2 anos", "3 anos", "mensal", "bimestral"}
         best = -1
         casou = False
-        alvo_concat = " ".join(sorted(labels_alvo))  # string para buscas simples
+        alvo_concat = " ".join(sorted(labels_alvo))
 
         for it in lista:
             itn = _norm(it or "")
             if not itn:
-                # trata string vazia como "todas"
                 casou, best = True, max(best, 0)
                 continue
-            # Match mais específico: rótulo completo
             if itn in labels_alvo:
                 casou, best = True, max(best, 3)
                 continue
-            # Nome do box
             if itn == base_prod_norm:
                 casou, best = True, max(best, 2)
                 continue
-            # Token genérico presente no rótulo atual
             if itn in tokens_genericos and itn in alvo_concat:
                 casou, best = True, max(best, 1)
 
         return casou, (best if best >= 0 else -1)
 
     for r in regras:
-        if (r.get("applies_to") or "").strip().lower() != "cupom":
+        if str(r.get("applies_to") or "").strip().lower() != "cupom":
             continue
 
-        cupom_cfg = r.get("cupom") or {}
-        alvo_cupom = _norm(cupom_cfg.get("nome") or "")
+        cupom_cfg: Mapping[str, Any] = r.get("cupom") or {}
+        alvo_cupom: str = _norm(str(cupom_cfg.get("nome") or ""))
         if not alvo_cupom or alvo_cupom != coupon_code_norm:
             continue
 
@@ -3710,47 +3852,92 @@ def aplicar_regras_transaction(
         if not ok:
             continue
 
-        action = r.get("action") or {}
-        atype = (action.get("type") or "").strip().lower()
+        action: Mapping[str, Any] = r.get("action") or {}
+        atype = str(action.get("type") or "").strip().lower()
 
         if atype == "adicionar_brindes":
-            brindes.extend(action.get("brindes") or [])
+            # pode vir lista de strings ou de objetos
+            items = action.get("brindes") or []
+            if isinstance(items, list):
+                for b in items:
+                    if isinstance(b, dict) or isinstance(b, str):
+                        brindes_raw.append(b)
 
         elif atype == "alterar_box":
-            # escolhe a mais específica (maior score)
-            box = (action.get("box") or "").strip()
-            if box:
-                if score > res_override_score:
-                    res_override = box
-                    res_override_score = score
+            box = str(action.get("box") or "").strip()
+            if box and score > res_override_score:
+                res_override = box
+                res_override_score = score
 
-    # Normalização final: remove duplicatas de brindes e ignora iguais ao box
+    # Normalização final: remove duplicatas e ignora iguais ao box atual/override.
     override_norm = _norm(res_override or base_produto_principal)
-    uniq = []
-    seen = set()
-    for b in brindes:
+    uniq: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for b in brindes_raw:
         if isinstance(b, dict):
             nb = str(b.get("nome", "")).strip()
-        elif isinstance(b, str):
-            nb = b.strip()
+            payload: dict[str, Any] = dict(b)
+            if not nb:
+                # se não veio 'nome', tenta usar 'nome' a partir de outra chave, senão pula
+                continue
         else:
-            nb = str(b or "").strip()
+            nb = b.strip()
+            if not nb:
+                continue
+            payload = {"nome": nb}
 
-        if not nb:
-            continue
         nbn = _norm(nb)
         if nbn in (base_prod_norm, override_norm):
             continue
-        if nbn not in seen:
-            uniq.append(nb)
-            seen.add(nbn)
+        if nbn in seen:
+            continue
 
-    return {"override_box": res_override, "brindes_extra": uniq}
+        seen.add(nbn)
+        uniq.append(payload)
+
+    return RegrasAplicadas(override_box=res_override, brindes_extra=uniq)
 
 
-def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
+class SKUInfo(TypedDict, total=False):
+    sku: str
+    peso: float | int
+    periodicidade: str
+    guru_ids: Sequence[str]
 
-    def _to_ts(val):
+
+# dicionário vindo do skus.json
+SKUs = Mapping[str, SKUInfo]
+
+
+class RetornoPedido(TypedDict):
+    transaction_id: str
+    id_oferta: str
+    produto_principal: str
+    sku_principal: str
+    peso_principal: float | int
+    valor_unitario: float
+    valor_total: float
+    total_pedido: float
+    valor_embutido: float
+    incluir_embutido: bool
+    embutido: str
+    brindes_extras: Sequence[dict[str, Any]]
+    data_pedido: datetime
+    forma_pagamento: str
+    usou_cupom: bool
+    tipo_plano: str
+    periodicidade: str
+    divisor: int
+
+
+def calcular_valores_pedido(
+    transacao: Mapping[str, Any],
+    dados: Mapping[str, Any],
+    skus_info: SKUs,
+    usar_valor_fixo: bool = False,
+) -> RetornoPedido:
+    def _to_ts(val: Any) -> float | None:
         if val is None:
             return None
         if isinstance(val, int | float):
@@ -3770,51 +3957,51 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
                 return None
         return None
 
-    modo = (dados.get("modo") or "").strip().lower()
+    modo: str = str(dados.get("modo") or "").strip().lower()
 
-    transaction_id = transacao.get("id", "")
-    product = transacao.get("product") or {}
-    internal_id = str(product.get("internal_id") or "").strip()
-    offer = product.get("offer") or {}
-    id_oferta = offer.get("id", "")
+    transaction_id: str = str(transacao.get("id", ""))
+    product: Mapping[str, Any] = cast(Mapping[str, Any], transacao.get("product") or {})
+    internal_id: str = str(product.get("internal_id") or "").strip()
+    offer: Mapping[str, Any] = cast(Mapping[str, Any], product.get("offer") or {})
+    id_oferta: str = str(offer.get("id", ""))
 
     print(
         f"[DEBUG calcular_valores_pedido] id={transaction_id} internal_id={internal_id} modo={modo}"
     )
 
-    invoice = transacao.get("invoice") or {}
-    is_upgrade = invoice.get("type") == "upgrade"
+    invoice: Mapping[str, Any] = cast(Mapping[str, Any], transacao.get("invoice") or {})
+    is_upgrade: bool = invoice.get("type") == "upgrade"
 
     # 🔐 data_pedido robusta (timestamp seg/ms ou ISO; normaliza para naive)
-    ts = (transacao.get("dates") or {}).get("ordered_at")
+    ts = (cast(Mapping[str, Any], transacao.get("dates") or {})).get("ordered_at")
     if ts is not None:
         try:
-            val = float(ts)
-            if val > 1e12:  # ms → s
-                val /= 1000.0
-            data_pedido = datetime.fromtimestamp(val, tz=UTC)
+            val_f = float(ts)
+            if val_f > 1e12:  # ms → s
+                val_f /= 1000.0
+            data_pedido: datetime = datetime.fromtimestamp(val_f, tz=UTC)
         except Exception:
-            s = transacao.get("ordered_at") or transacao.get("created_at") or "1970-01-01"
+            s = str(transacao.get("ordered_at") or transacao.get("created_at") or "1970-01-01")
             dt = parse_date(s)
             data_pedido = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
     else:
-        s = transacao.get("ordered_at") or transacao.get("created_at") or "1970-01-01"
+        s = str(transacao.get("ordered_at") or transacao.get("created_at") or "1970-01-01")
         dt = parse_date(s)
         data_pedido = dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
 
-    payment = transacao.get("payment") or {}
+    payment: Mapping[str, Any] = cast(Mapping[str, Any], transacao.get("payment") or {})
     try:
-        valor_total_pago = float(payment.get("total") or 0)
+        valor_total_pago: float = float(payment.get("total") or 0)
     except Exception:
         valor_total_pago = 0.0
 
-    coupon_info_raw = payment.get("coupon", {})
-    coupon_info = coupon_info_raw if isinstance(coupon_info_raw, dict) else {}
-    cupom = (coupon_info.get("coupon_code") or "").strip().lower()
-    incidence_type = str(coupon_info.get("incidence_type") or "").strip().lower()
+    coupon_info_raw: Any = payment.get("coupon", {})
+    coupon_info: Mapping[str, Any] = coupon_info_raw if isinstance(coupon_info_raw, dict) else {}
+    cupom: str = str(coupon_info.get("coupon_code") or "").strip().lower()
+    incidence_type: str = str(coupon_info.get("incidence_type") or "").strip().lower()
 
     # 🔎 produto principal (via internal_id → skus_info) com fallbacks
-    produto_principal = None
+    produto_principal: str | None = None
     if internal_id:
         for nome, info in skus_info.items():
             try:
@@ -3844,53 +4031,53 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
             print(
                 f"[⚠️ calcular_valores_pedido] skus_info vazio; retornando estrutura mínima para '{transaction_id}'."
             )
-            return {
-                "transaction_id": transaction_id,
-                "id_oferta": id_oferta,
-                "produto_principal": "",
-                "sku_principal": "",
-                "peso_principal": 0,
-                "valor_unitario": round(valor_total_pago, 2),
-                "valor_total": round(valor_total_pago, 2),
-                "total_pedido": round(valor_total_pago, 2),
-                "valor_embutido": 0.0,
-                "incluir_embutido": False,
-                "embutido": "",
-                "brindes_extras": [],
-                "data_pedido": data_pedido,
-                "forma_pagamento": payment.get("method", "") or "",
-                "usou_cupom": bool(cupom),
-                "tipo_plano": "",
-                "periodicidade": "",
-                "divisor": 1,
-            }
+            return RetornoPedido(
+                transaction_id=transaction_id,
+                id_oferta=id_oferta,
+                produto_principal="",
+                sku_principal="",
+                peso_principal=0,
+                valor_unitario=round(valor_total_pago, 2),
+                valor_total=round(valor_total_pago, 2),
+                total_pedido=round(valor_total_pago, 2),
+                valor_embutido=0.0,
+                incluir_embutido=False,
+                embutido="",
+                brindes_extras=[],
+                data_pedido=data_pedido,
+                forma_pagamento=str(payment.get("method", "") or ""),
+                usou_cupom=bool(cupom),
+                tipo_plano="",
+                periodicidade="",
+                divisor=1,
+            )
 
-    info_produto = skus_info.get(produto_principal, {}) or {}
-    sku_principal = info_produto.get("sku", "")
-    peso_principal = info_produto.get("peso", 0)
+    info_produto: SKUInfo = skus_info.get(produto_principal, {}) or {}
+    sku_principal: str = str(info_produto.get("sku", "") or "")
+    peso_principal: float | int = cast(float | int, info_produto.get("peso", 0))
 
     # 🚫 Sem regras para 'produtos' OU quando não tiver assinatura
     if modo == "produtos" or not transacao.get("subscription"):
-        return {
-            "transaction_id": transaction_id,
-            "id_oferta": id_oferta,
-            "produto_principal": produto_principal,
-            "sku_principal": sku_principal,
-            "peso_principal": peso_principal,
-            "valor_unitario": round(valor_total_pago, 2),
-            "valor_total": round(valor_total_pago, 2),
-            "total_pedido": round(valor_total_pago, 2),
-            "valor_embutido": 0.0,
-            "incluir_embutido": False,
-            "embutido": "",
-            "brindes_extras": [],
-            "data_pedido": data_pedido,
-            "forma_pagamento": payment.get("method", "") or "",
-            "usou_cupom": bool(cupom),
-            "tipo_plano": "",
-            "periodicidade": "",
-            "divisor": 1,
-        }
+        return RetornoPedido(
+            transaction_id=transaction_id,
+            id_oferta=id_oferta,
+            produto_principal=produto_principal,
+            sku_principal=sku_principal,
+            peso_principal=peso_principal,
+            valor_unitario=round(valor_total_pago, 2),
+            valor_total=round(valor_total_pago, 2),
+            total_pedido=round(valor_total_pago, 2),
+            valor_embutido=0.0,
+            incluir_embutido=False,
+            embutido="",
+            brindes_extras=[],
+            data_pedido=data_pedido,
+            forma_pagamento=str(payment.get("method", "") or ""),
+            usou_cupom=bool(cupom),
+            tipo_plano="",
+            periodicidade="",
+            divisor=1,
+        )
 
     # =========================
     # ASSINATURAS
@@ -3898,7 +4085,12 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
     # ✅ janela/regras protegidas
     try:
         print(f"[DEBUG janela-check] id={transaction_id} data_pedido={data_pedido}")
-        aplica_regras_neste_periodo = dentro_periodo_selecionado(dados, data_pedido)
+        aplica_regras_neste_periodo: bool = bool(
+            dentro_periodo_selecionado(
+                cast(dict[Any, Any], dados),  # <-- converte Mapping -> dict p/ mypy
+                data_pedido,
+            )
+        )
     except Exception as e:
         print(f"[DEBUG janela-skip] Erro em dentro_periodo_selecionado: {e}")
         aplica_regras_neste_periodo = False
@@ -3906,56 +4098,75 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
     # Regras/cupom/override só se dentro do período
     if aplica_regras_neste_periodo:
         try:
-            regras_aplicadas = (
-                aplicar_regras_transaction(transacao, dados, skus_info, produto_principal) or {}
+            regras_aplicadas: RegrasAplicadas = cast(
+                RegrasAplicadas,
+                aplicar_regras_transaction(
+                    cast(dict[Any, Any], transacao),  # <-- Mapping -> dict
+                    cast(dict[Any, Any], dados),  # <-- Mapping -> dict
+                    cast(dict[Any, Any], skus_info),  # <-- Mapping[str, SKUInfo] -> dict[Any, Any]
+                    produto_principal,
+                )
+                or {},
             )
         except Exception as e:
             print(f"[⚠️ regras] Erro em aplicar_regras_transaction: {e}")
-            regras_aplicadas = {}
+            regras_aplicadas = RegrasAplicadas()
     else:
-        regras_aplicadas = {}
+        regras_aplicadas = RegrasAplicadas()
 
-    override_box = regras_aplicadas.get("override_box")
-    brindes_extra_por_regra = regras_aplicadas.get("brindes_extra", []) or []
+    override_box: str | None = cast(str | None, regras_aplicadas.get("override_box"))
+    brindes_extra_por_regra: Sequence[dict[str, Any]] = (
+        regras_aplicadas.get("brindes_extra", []) or []
+    )
 
     if override_box:
         produto_principal = override_box
         info_produto = skus_info.get(produto_principal, {}) or {}
-        sku_principal = info_produto.get("sku", "")
-        peso_principal = info_produto.get("peso", 0)
+        sku_principal = str(info_produto.get("sku", "") or "")
+        peso_principal = cast(float | int, info_produto.get("peso", 0))
 
-    tipo_assinatura = transacao.get("tipo_assinatura", "") or ""
+    tipo_assinatura: str = str(transacao.get("tipo_assinatura", "") or "")
 
     # Cupons personalizados só se dentro do período
     if aplica_regras_neste_periodo:
         if tipo_assinatura == "anuais":
-            prod_custom = (dados.get("cupons_personalizados_anual") or {}).get(cupom)
+            prod_custom = (
+                cast(Mapping[str, Any], dados.get("cupons_personalizados_anual") or {})
+            ).get(cupom)
         elif tipo_assinatura == "bimestrais":
-            prod_custom = (dados.get("cupons_personalizados_bimestral") or {}).get(cupom)
+            prod_custom = (
+                cast(Mapping[str, Any], dados.get("cupons_personalizados_bimestral") or {})
+            ).get(cupom)
         else:
             prod_custom = None
         if prod_custom and prod_custom in skus_info:
-            produto_principal = prod_custom
+            produto_principal = cast(str, prod_custom)
             info_produto = skus_info.get(produto_principal, {}) or {}
-            sku_principal = info_produto.get("sku", "")
-            peso_principal = info_produto.get("peso", 0)
+            sku_principal = str(info_produto.get("sku", "") or "")
+            peso_principal = cast(float | int, info_produto.get("peso", 0))
 
     # periodicidade: override manual → produto → inferência
-    periodicidade = (
-        dados.get("periodicidade_selecionada")
-        or dados.get("periodicidade")
-        or info_produto.get("periodicidade")
-        or ("mensal" if tipo_assinatura == "mensais" else "bimestral")
+    periodicidade: str = (
+        str(
+            dados.get("periodicidade_selecionada")
+            or dados.get("periodicidade")
+            or info_produto.get("periodicidade")
+            or ("mensal" if tipo_assinatura == "mensais" else "bimestral")
+            or ""
+        )
+        .strip()
+        .lower()
     )
-    periodicidade = str(periodicidade or "").strip().lower()
 
     # embutido via oferta (respeita timestamps E a janela)
-    nome_embutido = (dados.get("ofertas_embutidas") or {}).get(str(id_oferta).strip(), "") or ""
+    ofertas_embutidas = cast(Mapping[str, Any], dados.get("ofertas_embutidas") or {})
+    nome_embutido: str = str(ofertas_embutidas.get(str(id_oferta).strip(), "") or "")
+
     ini_ts = _to_ts(dados.get("embutido_ini_ts"))
     end_ts = _to_ts(dados.get("embutido_end_ts"))
     dp_ts = _to_ts(data_pedido)
 
-    incluir_embutido = bool(
+    incluir_embutido: bool = bool(
         nome_embutido
         and dp_ts is not None
         and ini_ts is not None
@@ -3963,10 +4174,10 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
         and ini_ts <= dp_ts <= end_ts
         and aplica_regras_neste_periodo
     )
-    valor_embutido = 0.0
+    valor_embutido: float = 0.0
 
     # 💰 tabela para assinaturas multi-ano
-    tabela_valores = {
+    tabela_valores: Mapping[tuple[str, str], float] = {
         ("anuais", "mensal"): 960,
         ("anuais", "bimestral"): 480,
         ("bianuais", "mensal"): 1920,
@@ -4022,36 +4233,41 @@ def calcular_valores_pedido(transacao, dados, skus_info, usar_valor_fixo=False):
         divisor = 1
 
     divisor = max(int(divisor or 1), 1)
-    valor_unitario = round(valor_assinatura / divisor, 2)
-    valor_total = valor_unitario
-    total_pedido = round(valor_unitario + (valor_embutido if incluir_embutido else 0.0), 2)
+    valor_unitario: float = round(valor_assinatura / divisor, 2)
+    valor_total: float = valor_unitario
+    total_pedido: float = round(valor_unitario + (valor_embutido if incluir_embutido else 0.0), 2)
 
-    return {
-        "transaction_id": transaction_id,
-        "id_oferta": id_oferta,
-        "produto_principal": produto_principal,
-        "sku_principal": sku_principal,
-        "peso_principal": peso_principal,
-        "valor_unitario": valor_unitario,
-        "valor_total": valor_total,
-        "total_pedido": total_pedido,
-        "valor_embutido": valor_embutido,
-        "incluir_embutido": incluir_embutido,
-        "embutido": nome_embutido,
-        "brindes_extras": brindes_extra_por_regra,
-        "data_pedido": data_pedido,
-        "forma_pagamento": payment.get("method", "") or "",
-        "usou_cupom": bool(cupom),
-        "tipo_plano": tipo_assinatura,
-        "periodicidade": periodicidade,  # ✅ ponto único de verdade
-        "divisor": divisor,
-    }
+    return RetornoPedido(
+        transaction_id=transaction_id,
+        id_oferta=id_oferta,
+        produto_principal=produto_principal,
+        sku_principal=sku_principal,
+        peso_principal=peso_principal,
+        valor_unitario=valor_unitario,
+        valor_total=valor_total,
+        total_pedido=total_pedido,
+        valor_embutido=valor_embutido,
+        incluir_embutido=incluir_embutido,
+        embutido=nome_embutido,
+        brindes_extras=brindes_extra_por_regra,
+        data_pedido=data_pedido,
+        forma_pagamento=str(payment.get("method", "") or ""),
+        usou_cupom=bool(cupom),
+        tipo_plano=tipo_assinatura,
+        periodicidade=periodicidade,
+        divisor=divisor,
+    )
 
 
 # Exibe resumo DMG
 
 
-def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
+def exibir_resumo_final(
+    linhas: Sequence[Mapping[str, Any]] | None,
+    contagem: Mapping[str, Any] | None,
+    estado: Mapping[str, Any] | None,
+    modo: str = "assinaturas",
+) -> None:
     """
     - modo="produtos": mostra total e lista de produtos adicionados (nome -> qtd).
     - modo≠"produtos": além do bloco de assinaturas, mostra:
@@ -4059,7 +4275,7 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
         • Trocas de box: detalhes (se disponíveis) ou totais por período.
     """
 
-    def _is_zero(v):
+    def _is_zero(v: Any) -> bool:
         s = str(v or "").strip()
         if not s:
             return False
@@ -4070,14 +4286,17 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
         except Exception:
             return False
 
-    def _pega_bloco(cont, chaves):
+    def _pega_bloco(cont: Mapping[str, Any] | None, chaves: Iterable[str]) -> Mapping[str, Any]:
+        if not cont:
+            return {}
         for k in chaves:
-            v = (cont or {}).get(k)
+            v = cont.get(k)
             if v is not None:
+                # garante dict-like
                 return v or {}
         return {}
 
-    def _normaliza_swaps(raw):
+    def _normaliza_swaps(raw: Any) -> list[tuple[str, str, int]]:
         """
         Aceita:
           - dict {("De","Para"): qtd}  OU  {"De → Para": qtd}
@@ -4085,59 +4304,59 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
           - Counter com chaves como acima
         Retorna lista [(de, para, qtd), ...]
         """
-        out = []
+        out: list[tuple[str, str, int]] = []
         if not raw:
             return out
 
         if isinstance(raw, Counter):
             raw = dict(raw)
 
-        # formato aninhado: {"De": {"Para": qtd}}
-        aninhado = all(isinstance(v, dict) for v in raw.values())
-        if aninhado:
-            for de, sub in raw.items():
-                for para, qtd in (sub or {}).items():
-                    try:
-                        q = int(qtd or 0)
-                    except Exception:
-                        q = 0
-                    if q > 0:
-                        out.append((str(de), str(para), q))
-            return out
+        if isinstance(raw, dict):
+            # formato aninhado: {"De": {"Para": qtd}}
+            aninhado = all(isinstance(v, dict) for v in raw.values())
+            if aninhado:
+                for de, sub in raw.items():
+                    for para, qtd in (sub or {}).items():
+                        try:
+                            q = int(qtd or 0)
+                        except Exception:
+                            q = 0
+                        if q > 0:
+                            out.append((str(de), str(para), q))
+                return out
 
-        # formato plano: chaves tuple ou string "De → Para"
-        for k, qtd in raw.items():
-            try:
-                q = int(qtd or 0)
-            except Exception:
-                q = 0
-            if q <= 0:
-                continue
-            if isinstance(k, tuple | list) and len(k) == 2:
-                de, para = k
-            else:
-                # tenta separar por seta
-                ks = str(k).split("->")
-                if len(ks) == 2:
-                    de, para = ks[0].strip(), ks[1].strip()
+            # formato plano: chaves tuple ou string "De → Para"/"De->Para"
+            for k, qtd in raw.items():
+                try:
+                    q = int(qtd or 0)
+                except Exception:
+                    q = 0
+                if q <= 0:
+                    continue
+                if isinstance(k, tuple | list) and len(k) == 2:
+                    de, para = k
                 else:
-                    ks = str(k).split("→")
+                    # tenta separar por seta
+                    de_s, para_s = str(k), "?"
+                    ks = str(k).split("->")
                     if len(ks) == 2:
-                        de, para = ks[0].strip(), ks[1].strip()
+                        de_s, para_s = ks[0].strip(), ks[1].strip()
                     else:
-                        # se não der para separar, trata como destino desconhecido
-                        de, para = str(k), "?"
-            out.append((str(de), str(para), q))
+                        ks = str(k).split("→")
+                        if len(ks) == 2:
+                            de_s, para_s = ks[0].strip(), ks[1].strip()
+                    de, para = de_s, para_s
+                out.append((str(de), str(para), q))
         return out
 
     try:
         modo = (modo or "").strip().lower()
-        linhas = linhas or []
-        total_linhas = len(linhas)
+        linhas_seq: Sequence[Mapping[str, Any]] = linhas or []
+        total_linhas = len(linhas_seq)
 
         # ---- Contagem geral de produtos por nome (todas as linhas)
-        produtos_ctr = Counter()
-        for lin in linhas:
+        produtos_ctr: Counter[str] = Counter()
+        for lin in linhas_seq:
             if isinstance(lin, dict):
                 nome = lin.get("Produto") or lin.get("produto") or lin.get("nome_produto") or ""
                 nome = str(nome).strip()
@@ -4146,8 +4365,7 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
 
         # ---------- MODO PRODUTOS ----------
         if modo == "produtos":
-
-            msg = [f"📦 Linhas adicionadas: {total_linhas}"]
+            msg: list[str] = [f"📦 Linhas adicionadas: {total_linhas}"]
             if produtos_ctr:
                 msg.append("\n🧾 Produtos adicionados:")
                 for nome, qtd in produtos_ctr.most_common():
@@ -4163,7 +4381,7 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
         # ---------- MODO ASSINATURAS ----------
         resumo = f"📦 Linhas adicionadas: {total_linhas}\n\n📘 Assinaturas:\n"
 
-        TIPOS = [
+        TIPOS: list[tuple[str, list[str]]] = [
             ("mensais", ["mensais", "mensal"]),
             ("bimestrais", ["bimestrais", "bimestral"]),
             ("anuais", ["anuais", "anual"]),
@@ -4179,8 +4397,8 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
             resumo += f"  - {label.capitalize()}: {assin} (cupons: {cupons})\n"
 
         # 🎁 Itens extras (brindes/embutidos) - computa a partir das linhas com valor 0
-        extras_ctr = Counter()
-        for lin in linhas:
+        extras_ctr: Counter[str] = Counter()
+        for lin in linhas_seq:
             if not isinstance(lin, dict):
                 continue
             nome = str(lin.get("Produto") or lin.get("produto") or "").strip()
@@ -4195,7 +4413,6 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
                 resumo += f"  - {nome}: {qtd}\n"
 
         # 🔁 Trocas de box
-        # 1) tenta detalhes
         swaps_raw = (estado or {}).get("alteracoes_box_detalhes") or (contagem or {}).get(
             "alteracoes_box_detalhes"
         )
@@ -4206,7 +4423,7 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
             for de, para, qtd in sorted(swaps_list, key=lambda x: (-x[2], x[0], x[1])):
                 resumo += f"  - {de} → {para}: {qtd}\n"
         else:
-            # 2) senão, mostra totais por período se houver
+            # totais por período, se houver
             tem_trocas = any(
                 int(_pega_bloco(contagem, ch).get("alteracoes_box", 0) or 0) > 0 for _, ch in TIPOS
             )
@@ -4232,22 +4449,30 @@ def exibir_resumo_final(linhas, contagem, estado, modo="assinaturas"):
 # Importação de planilha DMG
 
 
-def importar_envios_realizados_planilha():
-    caminho_arquivo, _ = QFileDialog.getOpenFileName(
-        None, "Selecionar planilha de envios já realizados", "", "Planilhas (*.xlsx *.xls *.csv)"
+def importar_envios_realizados_planilha() -> None:
+    # QFileDialog.getOpenFileName -> tuple[str, str]
+    caminho_tuple: tuple[str, str] = QFileDialog.getOpenFileName(
+        cast(QWidget, None),
+        "Selecionar planilha de envios já realizados",
+        "",
+        "Planilhas (*.xlsx *.xls *.csv)",
     )
+    caminho_arquivo: str = caminho_tuple[0]
     if not caminho_arquivo:
         return
 
     try:
-        df = (
-            pd.read_excel(caminho_arquivo)
-            if caminho_arquivo.endswith((".xls", ".xlsx"))
-            else pd.read_csv(caminho_arquivo)
-        )
+        # df de entrada
+        if caminho_arquivo.endswith((".xls", ".xlsx")):
+            df: pd.DataFrame = pd.read_excel(caminho_arquivo)
+        else:
+            df = pd.read_csv(caminho_arquivo)
         df.columns = [str(c).strip().lower() for c in df.columns]
 
-        if "id transação" not in df.columns and "assinatura código" not in df.columns:
+        # valida colunas mínimas
+        tem_transacao: bool = "id transação" in df.columns
+        tem_assinatura: bool = "assinatura código" in df.columns
+        if not tem_transacao and not tem_assinatura:
             comunicador_global.mostrar_mensagem.emit(
                 "erro",
                 "Erro",
@@ -4255,50 +4480,71 @@ def importar_envios_realizados_planilha():
             )
             return
 
-        df["transaction_id"] = (
-            (df.get("id transação") or "").astype(str).str.strip()
-            if "id transação" in df.columns
-            else ""
-        )
-        df["subscription_id"] = (
-            (df.get("assinatura código") or "").astype(str).str.strip()
-            if "assinatura código" in df.columns
-            else ""
-        )
+        # normaliza colunas derivadas (evita usar Series em expressão booleana)
+        if tem_transacao:
+            df["transaction_id"] = df["id transação"].astype(str).str.strip()
+        else:
+            df["transaction_id"] = ""
 
-        # pergunta ano/mês
-        ano_atual = QDate.currentDate().year()
-        mes_padrao = QDate.currentDate().month()
-        ano, ok1 = QInputDialog.getInt(
-            None, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
+        if tem_assinatura:
+            df["subscription_id"] = df["assinatura código"].astype(str).str.strip()
+        else:
+            df["subscription_id"] = ""
+
+        # ===== Pergunta ano/mês =====
+        ano_atual: int = int(QDate.currentDate().year())
+        mes_padrao: int = int(QDate.currentDate().month())
+
+        ano_sel, ok1 = QInputDialog.getInt(
+            cast(QWidget, None),
+            "Selecionar Ano",
+            "Ano do envio:",
+            value=ano_atual,
+            min=2020,
+            max=2035,
         )
         if not ok1:
             return
-        mes, ok2 = QInputDialog.getInt(
-            None, "Selecionar Mês", "Mês (1 a 12):", value=mes_padrao, min=1, max=12
+        ano: int = int(ano_sel)
+
+        mes_sel, ok2 = QInputDialog.getInt(
+            cast(QWidget, None),
+            "Selecionar Mês",
+            "Mês (1 a 12):",
+            value=mes_padrao,
+            min=1,
+            max=12,
         )
         if not ok2:
             return
-        bimestre = 1 + (mes - 1) // 2
+        mes: int = int(mes_sel)
 
-        # pergunta periodicidade
-        periodicidades = ["mensal", "bimestral"]
-        periodicidade, okp = QInputDialog.getItem(
-            None, "periodicidade", "Periodicidade dos registros:", periodicidades, editable=False
+        bimestre: int = 1 + (mes - 1) // 2
+
+        # ===== Pergunta periodicidade =====
+        periodicidades: list[str] = ["mensal", "bimestral"]
+        periodicidade_sel, okp = QInputDialog.getItem(
+            cast(QWidget, None),
+            "periodicidade",
+            "Periodicidade dos registros:",
+            periodicidades,
+            editable=False,
         )
         if not okp:
             return
+        periodicidade: str = str(periodicidade_sel)
 
-        registros_assinaturas = []
-        registros_produtos = []
-        registro_em = local_now().strftime("%Y-%m-%d %H:%M:%S")
+        registros_assinaturas: list[dict[str, Any]] = []
+        registros_produtos: list[dict[str, Any]] = []
+        registro_em: str = local_now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # ===== Montagem dos registros =====
         for _, r in df.iterrows():
-            sid = str(r.get("subscription_id", "")).strip()
-            tid = str(r.get("transaction_id", "")).strip()
+            sid: str = str(r.get("subscription_id", "")).strip()
+            tid: str = str(r.get("transaction_id", "")).strip()
 
             if sid:
-                periodo = mes if periodicidade == "mensal" else bimestre
+                periodo: int = mes if periodicidade == "mensal" else bimestre
                 registros_assinaturas.append(
                     {
                         "subscription_id": sid,
@@ -4309,7 +4555,12 @@ def importar_envios_realizados_planilha():
                     }
                 )
             elif tid:
-                registros_produtos.append({"transaction_id": tid, "registro_em": registro_em})
+                registros_produtos.append(
+                    {
+                        "transaction_id": tid,
+                        "registro_em": registro_em,
+                    }
+                )
 
         if not registros_assinaturas and not registros_produtos:
             comunicador_global.mostrar_mensagem.emit(
@@ -4317,17 +4568,23 @@ def importar_envios_realizados_planilha():
             )
             return
 
-        caminho_excel = os.path.join(os.path.dirname(__file__), "Envios", "envios_log.xlsx")
+        caminho_excel: str = os.path.join(os.path.dirname(__file__), "Envios", "envios_log.xlsx")
         os.makedirs(os.path.dirname(caminho_excel), exist_ok=True)
 
         if registros_assinaturas:
             salvar_em_excel_sem_duplicados(
-                caminho_excel, registros_assinaturas, sheet_name="assinaturas"
+                caminho_excel,
+                registros_assinaturas,
+                sheet_name="assinaturas",
             )
         if registros_produtos:
-            salvar_em_excel_sem_duplicados(caminho_excel, registros_produtos, sheet_name="produtos")
+            salvar_em_excel_sem_duplicados(
+                caminho_excel,
+                registros_produtos,
+                sheet_name="produtos",
+            )
 
-        total = len(registros_assinaturas) + len(registros_produtos)
+        total: int = len(registros_assinaturas) + len(registros_produtos)
         comunicador_global.mostrar_mensagem.emit(
             "info",
             "Importação concluída",
@@ -4336,7 +4593,9 @@ def importar_envios_realizados_planilha():
 
     except Exception as e:
         comunicador_global.mostrar_mensagem.emit(
-            "erro", "Erro", f"Erro ao importar a planilha:\n{e}"
+            "erro",
+            "Erro",
+            f"Erro ao importar a planilha:\n{e}",
         )
 
 
@@ -4417,45 +4676,59 @@ def padronizar_planilha_importada(df: pd.DataFrame, preservar_extras: bool = Tru
     return base
 
 
-def importar_planilha_pedidos_guru():
-    caminho, _ = QFileDialog.getOpenFileName(
-        None, "Selecione a planilha de pedidos", "", "Arquivos CSV (*.csv);;Arquivos Excel (*.xlsx)"
+def importar_planilha_pedidos_guru() -> None:
+    # QFileDialog.getOpenFileName -> tuple[str, str]
+    caminho_tuple: tuple[str, str] = QFileDialog.getOpenFileName(
+        None,
+        "Selecione a planilha de pedidos",
+        "",
+        "Arquivos CSV (*.csv);;Arquivos Excel (*.xlsx)",
     )
+    caminho: str = caminho_tuple[0]
     if not caminho:
         return
 
+    # df de entrada
     try:
         if caminho.endswith(".csv"):
-            df = pd.read_csv(caminho, sep=";", encoding="utf-8", quotechar='"', dtype=str)
+            df: pd.DataFrame = pd.read_csv(
+                caminho, sep=";", encoding="utf-8", quotechar='"', dtype=str
+            )
         else:
             df = pd.read_excel(caminho)
     except Exception as e:
         comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Erro ao carregar planilha: {e}")
         return
 
-    # 🔽 Selecionar produto a partir do skus.json
-    nomes_produtos = sorted(skus_info.keys())
-    produto_nome, ok = QInputDialog.getItem(
-        None,
+    # ===== Selecionar produto a partir do skus.json =====
+    # skus_info é global e possivelmente sem tipo -> usar cast para satisfazer mypy
+    skus_map: Mapping[str, dict[str, Any]] = cast(Mapping[str, dict[str, Any]], skus_info)
+
+    nomes_produtos: list[str] = sorted(skus_map.keys())
+
+    # QInputDialog.getItem -> tuple[str, bool]
+    produto_nome_sel, ok = QInputDialog.getItem(
+        cast(QWidget, None),
         "Selecionar Produto",
         "Escolha o nome do produto para todas as linhas:",
         nomes_produtos,
         editable=False,
     )
+    produto_nome: str = str(produto_nome_sel)
     if not ok or not produto_nome:
         return
 
-    info_produto = skus_info.get(produto_nome)
+    info_produto: dict[str, Any] | None = skus_map.get(produto_nome)
     if not info_produto:
         comunicador_global.mostrar_mensagem.emit(
             "erro", "Produto não encontrado", f"'{produto_nome}' não está no skus.json"
         )
         return
 
-    sku = info_produto.get("sku", "")
+    sku: str = str(info_produto.get("sku", ""))
 
     # ===== Helpers =====
-    def parse_money(val):
+    def parse_money(val: Any) -> float:
         if pd.isna(val) or str(val).strip() == "":
             return 0.0
         s = str(val).strip().replace(".", "").replace(",", ".")
@@ -4464,7 +4737,7 @@ def importar_planilha_pedidos_guru():
         except Exception:
             return 0.0
 
-    def limpar(valor):
+    def limpar(valor: Any) -> str:
         return "" if pd.isna(valor) else str(valor).strip()
 
     def eh_assinatura(nome_produto: str) -> bool:
@@ -4490,11 +4763,10 @@ def importar_planilha_pedidos_guru():
             return "bimestrais"
         if "mensal" in s:
             return "mensais"
-        # fallback se for assinatura e não deu match
-        return "anuais"
+        return "anuais"  # fallback
 
-    # 🧮 Tabela multi-ano (mesma usada no outro fluxo)
-    TABELA_VALORES = {
+    # 🧮 Tabela multi-ano
+    TABELA_VALORES: dict[tuple[str, str], int] = {
         ("anuais", "mensal"): 960,
         ("anuais", "bimestral"): 480,
         ("bianuais", "mensal"): 1920,
@@ -4518,52 +4790,54 @@ def importar_planilha_pedidos_guru():
             return 1
         return 1
 
-    registros = []
+    registros: list[dict[str, Any]] = []
+
+    # df.iterrows() -> (index: Any, linha: pd.Series)
     for _, linha in df.iterrows():
+        # protege contra linhas vazias
         if pd.isna(linha.get("email contato")) and pd.isna(linha.get("nome contato")):
             continue
 
         try:
             # campos base da planilha Guru
-            valor_venda = parse_money(
-                linha.get("valor venda", "")
-            )  # valor final pago (sempre vira Total Pedido)
-            nome_prod = linha.get("nome produto", "")
-            id_prod = linha.get("id produto", "")
-            assinatura_codigo = (
-                linha.get("assinatura código") or linha.get("assinatura codigo") or ""
+            valor_venda: float = parse_money(linha.get("valor venda", ""))
+            nome_prod: str = str(linha.get("nome produto", ""))
+            id_prod: str = str(linha.get("id produto", ""))
+            assinatura_codigo: str = (
+                str(linha.get("assinatura código") or linha.get("assinatura codigo") or "")
             ).strip()
 
-            is_assin = eh_assinatura(nome_prod)
-            periodicidade = inferir_periodicidade(id_prod) if is_assin else ""
-            tipo_ass = inferir_tipo_assinatura(nome_prod) if is_assin else ""
+            is_assin: bool = eh_assinatura(nome_prod)
+            periodicidade: str = inferir_periodicidade(id_prod) if is_assin else ""
+            tipo_ass: str = inferir_tipo_assinatura(nome_prod) if is_assin else ""
 
-            # Regra de fallback de preços: só quando É assinatura e NÃO tem "assinatura código"
-            usar_fallback = bool(is_assin and assinatura_codigo == "")
+            # Fallback de preços: assinatura sem "assinatura código"
+            usar_fallback: bool = bool(is_assin and assinatura_codigo == "")
 
             # Base para aplicar divisor
             if is_assin:
                 if usar_fallback and tipo_ass in {"anuais", "bianuais", "trianuais"}:
-                    base = float(TABELA_VALORES.get((tipo_ass, periodicidade), valor_venda))
+                    base: float = float(TABELA_VALORES.get((tipo_ass, periodicidade), valor_venda))
                 else:
                     base = float(valor_venda)
-                div = divisor_para(tipo_ass, periodicidade)
-                valor_unitario = round(base / max(div, 1), 2)
-                valor_total_item = valor_unitario  # qtd = 1
+                div: int = divisor_para(tipo_ass, periodicidade)
+                valor_unitario: float = round(base / max(div, 1), 2)
+                valor_total_item: float = valor_unitario  # qtd = 1
             else:
-                # não assinatura → sem divisor
                 valor_unitario = valor_venda
                 valor_total_item = valor_venda
 
-            total_pedido = valor_venda  # sempre o valor efetivamente pago
+            total_pedido: float = valor_venda  # sempre o valor efetivamente pago
 
-            cpf = limpar(linha.get("doc contato")).zfill(11)
-            cep = limpar(linha.get("cep contato")).zfill(8)[:8]
-            telefone = limpar(linha.get("telefone contato"))
+            cpf: str = limpar(linha.get("doc contato")).zfill(11)
+            cep: str = limpar(linha.get("cep contato")).zfill(8)[:8]
+            telefone: str = limpar(linha.get("telefone contato"))
 
-            data_pedido_raw = linha.get("data pedido", "")
+            data_pedido_raw: Any = linha.get("data pedido", "")
             try:
-                data_pedido = pd.to_datetime(data_pedido_raw, dayfirst=True).strftime("%d/%m/%Y")
+                data_pedido: str = pd.to_datetime(data_pedido_raw, dayfirst=True).strftime(
+                    "%d/%m/%Y"
+                )
             except Exception:
                 data_pedido = QDate.currentDate().toString("dd/MM/yyyy")
 
@@ -4613,7 +4887,7 @@ def importar_planilha_pedidos_guru():
                     "ID Forma Pagamento": "",
                     "transaction_id": limpar(linha.get("id transação")),
                     "indisponivel": "S" if eh_indisponivel(produto_nome) else "",
-                    # opcional: registrar metadados detectados (úteis para auditoria)
+                    # metadados úteis para auditoria
                     "periodicidade": periodicidade,
                     "Plano Assinatura": tipo_ass if is_assin else "",
                     "assinatura_codigo": assinatura_codigo,
@@ -4626,16 +4900,19 @@ def importar_planilha_pedidos_guru():
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhum registro foi importado.")
         return
 
-    df_importado = pd.DataFrame(registros)
+    df_importado: pd.DataFrame = pd.DataFrame(registros)
     df_importado = padronizar_planilha_importada(df_importado)
 
-    if "df_planilha_parcial" not in estado:
-        estado["df_planilha_parcial"] = pd.DataFrame()
+    # estado é global e possivelmente sem tipo -> cast local
+    estado_map: dict[str, Any] = cast(dict[str, Any], estado)
 
-    estado["df_planilha_parcial"] = pd.concat(
-        [estado["df_planilha_parcial"], df_importado], ignore_index=True
+    if "df_planilha_parcial" not in estado_map:
+        estado_map["df_planilha_parcial"] = pd.DataFrame()
+
+    estado_map["df_planilha_parcial"] = pd.concat(
+        [estado_map["df_planilha_parcial"], df_importado], ignore_index=True
     )
-    estado["transacoes_obtidas"] = True
+    estado_map["transacoes_obtidas"] = True
 
     comunicador_global.mostrar_mensagem.emit(
         "info",
@@ -4644,7 +4921,7 @@ def importar_planilha_pedidos_guru():
     )
 
 
-def selecionar_planilha_comercial(skus_info):
+def selecionar_planilha_comercial(skus_info: dict[str, Any]) -> None:
     caminho, _ = QFileDialog.getOpenFileName(
         None, "Selecionar planilha do comercial", "", "Planilhas Excel (*.xlsx *.xls)"
     )
@@ -4655,7 +4932,7 @@ def selecionar_planilha_comercial(skus_info):
 SKU_RE = re.compile(r"\(([A-Za-z0-9._\-]+)\)")  # captura CÓDIGO dentro de parênteses, p.ex. (L002A)
 
 
-def _build_sku_index(skus_info: dict) -> dict:
+def _build_sku_index(skus_info: Mapping[str, Any]) -> dict[str, str]:
     """
     Constrói um índice SKU (UPPER) -> nome_padrao a partir do skus_info.
     Espera-se skus_info no formato: {nome_padrao: {"sku": "...", ...}, ...}
@@ -4689,9 +4966,12 @@ def _extract_all_skus(texto: str) -> list:
     return [m.strip() for m in SKU_RE.findall(str(texto)) if m and str(m).strip()]
 
 
-def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
+def adicionar_brindes_e_substituir_box(
+    caminho_planilha_comercial: str,
+    skus_info: Mapping[str, Any],
+) -> None:
     try:
-        df_comercial = pd.read_excel(caminho_planilha_comercial)
+        df_comercial: pd.DataFrame = pd.read_excel(caminho_planilha_comercial)
     except Exception as e:
         comunicador_global.mostrar_mensagem.emit(
             "erro", "Erro", f"Erro ao ler a planilha do comercial: {e}"
@@ -4700,16 +4980,27 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
 
     # normalização básica
     df_comercial.columns = df_comercial.columns.str.strip().str.lower()
+    if "subscription_id" not in df_comercial.columns:
+        comunicador_global.mostrar_mensagem.emit(
+            "erro", "Erro", "A planilha do comercial precisa ter a coluna 'subscription_id'."
+        )
+        return
     df_comercial = df_comercial.dropna(subset=["subscription_id"])
 
     # df parcial (destino)
-    df_saida = estado.get("df_planilha_parcial")
-    if df_saida is None or df_saida.empty:
+    df_saida_any: Any = estado.get("df_planilha_parcial")
+    if not isinstance(df_saida_any, pd.DataFrame) or df_saida_any.empty:
         comunicador_global.mostrar_mensagem.emit("erro", "Erro", "Planilha parcial não carregada.")
         return
+    df_saida: pd.DataFrame = df_saida_any
+
+    # garante colunas usadas
+    for col in ("subscription_id", "SKU", "Produto"):
+        if col not in df_saida.columns:
+            df_saida[col] = ""
 
     # índice SKU -> nome_padrao
-    sku_index = _build_sku_index(skus_info)
+    sku_index: dict[str, str] = _build_sku_index(skus_info)
     if not sku_index:
         comunicador_global.mostrar_mensagem.emit(
             "erro", "Erro", "Índice de SKUs vazio no skus_info."
@@ -4718,8 +5009,10 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
 
     # ---------- escolha do BOX ORIGINAL (apenas por SKU) ----------
     lista_skus = sorted(sku_index.keys(), key=str.casefold)
+
+    parent_widget: QWidget = cast(QWidget, QApplication.activeWindow() or QWidget())
     opcao_escolhida, ok = QInputDialog.getItem(
-        None,
+        parent_widget,
         "Box original (SKU)",
         "Selecione o SKU do BOX ORIGINAL (produto a ser substituído):",
         lista_skus,
@@ -4734,18 +5027,19 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
 
     sku_box_original = str(opcao_escolhida).strip()
 
-    novas_linhas = []
+    novas_linhas: list[pd.Series] = []
 
     # ---------- processa cada linha da planilha comercial ----------
     for _, row in df_comercial.iterrows():
-        subscription_id = str(row["subscription_id"]).strip()
+        subscription_id = str(row.get("subscription_id", "")).strip()
+        if not subscription_id:
+            continue
 
         # 1) SUBSTITUIÇÃO do box principal (NÃO cria linha)
-        #    extrai o SKU do "box_principal" informado (ex.: "Santo Agostinho (B005A)" -> "B005A")
         sku_box_novo = _extract_first_sku(str(row.get("box_principal", "")).strip())
         if sku_box_novo:
             # nome_padrao a partir do SKU; se não existir, usa o próprio texto do comercial como fallback
-            nome_padrao_box_novo = sku_index.get(sku_box_novo.upper(), None)
+            nome_padrao_box_novo = sku_index.get(sku_box_novo.upper())
             mask_sub = df_saida["subscription_id"].astype(str).str.strip() == subscription_id
             mask_box_original = (
                 df_saida["SKU"].astype(str).str.strip().str.upper() == sku_box_original.upper()
@@ -4753,16 +5047,16 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
             idx_alvo = df_saida[mask_sub & mask_box_original].index
 
             for idx in idx_alvo:
-                df_saida.at[idx, "Produto"] = nome_padrao_box_novo or df_saida.at[idx, "Produto"]
+                if nome_padrao_box_novo:
+                    df_saida.at[idx, "Produto"] = nome_padrao_box_novo
                 df_saida.at[idx, "SKU"] = sku_box_novo  # substitui pelo novo SKU
-                # mantém quantidade/valores como estão
 
         # 2) BRINDES: cria NOVA LINHA por SKU (dedup por subscription_id + SKU)
         brindes_str = str(row.get("brindes", "")).strip()
         if not brindes_str:
             continue
 
-        skus_brindes = _extract_all_skus(brindes_str)  # pode retornar múltiplos
+        skus_brindes: list[str] = _extract_all_skus(brindes_str)
         if not skus_brindes:
             continue
 
@@ -4786,25 +5080,31 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
             if not linhas_base.empty:
                 base = linhas_base.iloc[0].copy()
                 # nome do produto a partir do índice SKU -> nome_padrao
-                nome_padrao_brinde = sku_index.get(sku_brinde_norm.upper(), None)
-                base["Produto"] = nome_padrao_brinde or base.get("Produto", "")
+                nome_padrao_brinde = sku_index.get(sku_brinde_norm.upper())
+                if nome_padrao_brinde:
+                    base["Produto"] = nome_padrao_brinde
                 base["SKU"] = sku_brinde_norm
+
                 if "Valor Unitário" in base.index:
                     base["Valor Unitário"] = 0.0
                 if "Valor Total" in base.index:
                     base["Valor Total"] = 0.0
+
                 base["subscription_id"] = subscription_id
                 if "transaction_id" in base.index:
                     base["transaction_id"] = ""
+
                 if "Quantidade" in base.index and (
                     pd.isna(base["Quantidade"]) or str(base["Quantidade"]).strip() == ""
                 ):
                     base["Quantidade"] = 1
+
                 novas_linhas.append(base)
 
     # concatena novas linhas (se houver) e salva
     if novas_linhas:
-        df_final = pd.concat([df_saida, pd.DataFrame(novas_linhas)], ignore_index=True)
+        df_novas = pd.DataFrame(novas_linhas)
+        df_final = pd.concat([df_saida, df_novas], ignore_index=True)
         estado["df_planilha_parcial"] = df_final
         comunicador_global.mostrar_mensagem.emit(
             "info", "Sucesso", f"{len(novas_linhas)} brinde(s) adicionados."
@@ -4819,16 +5119,18 @@ def adicionar_brindes_e_substituir_box(caminho_planilha_comercial, skus_info):
 # Geração e controle de logs de envios DMG
 
 
-def filtrar_linhas_ja_enviadas():
-    df_orig = estado.get("df_planilha_parcial")
-    if df_orig is None or df_orig.empty:
+def filtrar_linhas_ja_enviadas() -> None:
+    # estado é global
+    df_any: Any = estado.get("df_planilha_parcial")
+    if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         comunicador_global.mostrar_mensagem.emit(
             "aviso", "Aviso", "Nenhuma planilha carregada para filtrar."
         )
         return
+    df_orig: pd.DataFrame = df_any
 
     # -- cópia de trabalho com nomes normalizados (não toca df_orig) --
-    df = df_orig.copy()
+    df: pd.DataFrame = df_orig.copy()
     df.columns = df.columns.str.strip()
     df.columns = df.columns.str.lower()
 
@@ -4838,34 +5140,54 @@ def filtrar_linhas_ja_enviadas():
     if "id transação" in df.columns and "transaction_id" not in df.columns:
         df["transaction_id"] = df["id transação"]
 
-    # normalizações só na cópia de trabalho
-    df["subscription_id"] = df.get("subscription_id", "").astype(str).fillna("").str.strip()
-    df["transaction_id"] = df.get("transaction_id", "").astype(str).fillna("").str.strip()
-    df["periodicidade"] = df.get("periodicidade", "").astype(str).str.lower().replace({"nan": ""})
-    df["periodo"] = pd.to_numeric(df.get("periodo", ""), errors="coerce").fillna(-1).astype(int)
+    # normalizações só na cópia de trabalho (evita Series|str)
+    if "subscription_id" not in df.columns:
+        df["subscription_id"] = ""
+    df["subscription_id"] = df["subscription_id"].astype(str).fillna("").str.strip()
 
-    # seleção do período
-    ano_atual = QDate.currentDate().year()
-    mes_padrao = QDate.currentDate().month()
+    if "transaction_id" not in df.columns:
+        df["transaction_id"] = ""
+    df["transaction_id"] = df["transaction_id"].astype(str).fillna("").str.strip()
+
+    if "periodicidade" not in df.columns:
+        df["periodicidade"] = ""
+    df["periodicidade"] = df["periodicidade"].astype(str).str.lower().replace({"nan": ""})
+
+    if "periodo" not in df.columns:
+        df["periodo"] = -1
+    df["periodo"] = pd.to_numeric(df["periodo"], errors="coerce").fillna(-1).astype(int)
+
+    # seleção do período (passa QWidget, não None)
+    ano_atual: int = QDate.currentDate().year()
+    mes_padrao: int = QDate.currentDate().month()
+    parent_widget: QWidget = cast(QWidget, QApplication.activeWindow() or QWidget())
+
     ano, ok1 = QInputDialog.getInt(
-        None, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
+        parent_widget, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
     )
     if not ok1:
         return
     mes, ok2 = QInputDialog.getInt(
-        None, "Selecionar Mês", "Mês (1 a 12):", value=mes_padrao, min=1, max=12
+        parent_widget, "Selecionar Mês", "Mês (1 a 12):", value=mes_padrao, min=1, max=12
     )
     if not ok2:
         return
-    bimestre = 1 + (mes - 1) // 2
+    bimestre: int = 1 + (mes - 1) // 2
 
     # carrega log
     caminho_excel = os.path.join(os.path.dirname(__file__), "Envios", "envios_log.xlsx")
-    assinaturas_existentes, produtos_existentes = set(), set()
+    assinaturas_existentes: set[tuple[str, int, str, int]] = set()
+    produtos_existentes: set[str] = set()
+
     if os.path.exists(caminho_excel):
         try:
             assinaturas_df = pd.read_excel(caminho_excel, sheet_name="assinaturas")
             produtos_df = pd.read_excel(caminho_excel, sheet_name="produtos")
+
+            # garante colunas em assinaturas_df
+            for col in ("subscription_id", "periodicidade", "periodo", "ano"):
+                if col not in assinaturas_df.columns:
+                    assinaturas_df[col] = "" if col in ("subscription_id", "periodicidade") else -1
 
             assinaturas_df["subscription_id"] = (
                 assinaturas_df["subscription_id"].astype(str).str.strip()
@@ -4876,21 +5198,32 @@ def filtrar_linhas_ja_enviadas():
             assinaturas_df["periodo"] = (
                 pd.to_numeric(assinaturas_df["periodo"], errors="coerce").fillna(-1).astype(int)
             )
+            assinaturas_df["ano"] = (
+                pd.to_numeric(assinaturas_df["ano"], errors="coerce").fillna(-1).astype(int)
+            )
 
             assinaturas_existentes = {
-                (row["subscription_id"], int(row["ano"]), row["periodicidade"], int(row["periodo"]))
+                (
+                    str(row["subscription_id"]),
+                    int(row["ano"]),
+                    str(row["periodicidade"]),
+                    int(row["periodo"]),
+                )
                 for _, row in assinaturas_df.iterrows()
-                if pd.notna(row.get("subscription_id"))
-                and str(row.get("subscription_id")).strip() != ""
+                if str(row.get("subscription_id", "")).strip() != ""
             }
+
+            # garante coluna em produtos_df
+            if "transaction_id" not in produtos_df.columns:
+                produtos_df["transaction_id"] = ""
             produtos_existentes = set(produtos_df["transaction_id"].astype(str).str.strip())
 
         except Exception as e:
             print(f"[⚠️] Erro ao ler Excel: {e}")
 
-    linhas_antes = len(df)
+    linhas_antes: int = len(df)
 
-    def deve_remover(row):
+    def deve_remover(row: pd.Series) -> bool:
         id_sub = str(row.get("subscription_id", "")).strip()
         id_trans = str(row.get("transaction_id", "")).strip()
 
@@ -4902,19 +5235,20 @@ def filtrar_linhas_ja_enviadas():
                 per_num = bimestre
             else:
                 return False
-            return (id_sub, ano, per, int(per_num)) in assinaturas_existentes
+            return (id_sub, int(ano), per, int(per_num)) in assinaturas_existentes
 
         if id_trans:
             return id_trans in produtos_existentes
 
         return False
 
-    mask_remover = df.apply(deve_remover, axis=1)
+    mask_remover: pd.Series = df.apply(deve_remover, axis=1).astype(bool)
 
     # -- aplica a máscara no DataFrame ORIGINAL, preservando schema/casos/acentos --
-    df_filtrado = df_orig.loc[~mask_remover.values].copy()
+    # usa a própria Series booleana (não ~mask_remover.values)
+    df_filtrado: pd.DataFrame = df_orig.loc[~mask_remover].copy()
 
-    removidas = linhas_antes - len(df_filtrado)
+    removidas: int = linhas_antes - len(df_filtrado)
     estado["df_planilha_parcial"] = df_filtrado
 
     comunicador_global.mostrar_mensagem.emit(
@@ -4924,29 +5258,34 @@ def filtrar_linhas_ja_enviadas():
     )
 
 
-def registrar_envios_por_mes_ano():
-    df = estado.get("df_planilha_parcial")
-    if df is None or df.empty:
+def registrar_envios_por_mes_ano() -> None:
+    # mypy: leia como objeto e só depois tipa corretamente
+    df_any: Any = estado.get("df_planilha_parcial")
+    if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhuma planilha carregada.")
         return
+    df: pd.DataFrame = df_any
 
-    ano_atual = QDate.currentDate().year()
-    mes_padrao = QDate.currentDate().year()
+    ano_atual: int = QDate.currentDate().year()
+    mes_padrao: int = QDate.currentDate().month()
+
+    # mypy/stubs do PyQt exigem QWidget, não None
+    parent_widget: QWidget = cast(QWidget, QApplication.activeWindow() or QWidget())
 
     ano, ok1 = QInputDialog.getInt(
-        None, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
+        parent_widget, "Selecionar Ano", "Ano do envio:", value=ano_atual, min=2020, max=2035
     )
     if not ok1:
         return
+
     mes, ok2 = QInputDialog.getInt(
-        None, "Selecionar Mês", "Mês (1 a 12):", value=mes_padrao, min=1, max=12
+        parent_widget, "Selecionar Mês", "Mês (1 a 12):", value=mes_padrao, min=1, max=12
     )
     if not ok2:
         return
 
-    bimestre = 1 + (mes - 1) // 2
-
-    dff = df.copy()
+    bimestre: int = 1 + (mes - 1) // 2
+    dff: pd.DataFrame = df.copy()
 
     # ✅ Garantias básicas
     for col in ("indisponivel", "periodicidade", "subscription_id", "origem"):
@@ -4969,8 +5308,7 @@ def registrar_envios_por_mes_ano():
     # 🔹 Assinaturas
     df_mensal = dff[dff["periodicidade"].eq("mensal")].copy()
     df_bimestral = dff[dff["periodicidade"].eq("bimestral")].copy()
-
-    # 🔹 Produtos (sem subscription_id ou marcados como origem produtos)
+    # 🔹 Produtos
     mask_prod = dff["subscription_id"].eq("") | dff["origem"].eq("produtos")
     df_produtos = dff[mask_prod].copy()
 
@@ -4991,20 +5329,21 @@ def registrar_envios_por_mes_ano():
     )
 
 
-def gerar_log_envios(df, ano, periodicidade, periodo):
+def gerar_log_envios(
+    df: pd.DataFrame,
+    ano: int,
+    periodicidade: str,
+    periodo: int,
+) -> None:
     if df is None or df.empty:
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Não há dados para registrar.")
         return
 
     df = df.copy()
-
     # ✅ Garantias
-    if "indisponivel" not in df.columns:
-        df["indisponivel"] = ""
-    if "subscription_id" not in df.columns:
-        df["subscription_id"] = ""
-    if "origem" not in df.columns:
-        df["origem"] = ""
+    for col in ("indisponivel", "subscription_id", "origem"):
+        if col not in df.columns:
+            df[col] = ""
 
     df["indisponivel"] = df["indisponivel"].astype(str)
     df["subscription_id"] = df["subscription_id"].astype(str).str.strip()
@@ -5018,13 +5357,11 @@ def gerar_log_envios(df, ano, periodicidade, periodo):
         )
         return
 
-    registros_assinaturas = []
-    registros_produtos = []
-    registro_em = local_now().strftime("%Y-%m-%d %H:%M:%S")
-
-    tem_id_lote = "ID Lote" in df.columns
-
-    ignorados_sem_trans = 0
+    registros_assinaturas: list[dict[str, Any]] = []
+    registros_produtos: list[dict[str, Any]] = []
+    registro_em: str = local_now().strftime("%Y-%m-%d %H:%M:%S")
+    tem_id_lote: bool = "ID Lote" in df.columns
+    ignorados_sem_trans: int = 0
 
     for _, r in df.iterrows():
         id_sub = str(r.get("subscription_id", "")).strip()
@@ -5036,14 +5373,14 @@ def gerar_log_envios(df, ano, periodicidade, periodo):
             registros_assinaturas.append(
                 {
                     "subscription_id": id_sub,
-                    "ano": int(ano),
-                    "periodicidade": str(periodicidade),
-                    "periodo": int(periodo),
+                    "ano": ano,
+                    "periodicidade": periodicidade,
+                    "periodo": periodo,
                     "registro_em": registro_em,
                 }
             )
         elif id_trans:
-            rec = {"transaction_id": id_trans, "registro_em": registro_em}
+            rec: dict[str, Any] = {"transaction_id": id_trans, "registro_em": registro_em}
             if tem_id_lote:
                 rec["id_lote"] = str(r.get("ID Lote", "")).strip()
             registros_produtos.append(rec)
@@ -5063,7 +5400,6 @@ def gerar_log_envios(df, ano, periodicidade, periodo):
         salvar_em_excel_sem_duplicados(
             caminho_excel, registros_assinaturas, sheet_name="assinaturas"
         )
-
     if registros_produtos:
         salvar_em_excel_sem_duplicados(caminho_excel, registros_produtos, sheet_name="produtos")
 
@@ -5078,23 +5414,46 @@ def gerar_log_envios(df, ano, periodicidade, periodo):
     comunicador_global.mostrar_mensagem.emit("info", "Registro concluído", msg)
 
 
-def salvar_em_excel_sem_duplicados(caminho, novos, sheet_name):
-    novos_df = pd.DataFrame(novos)
+def salvar_em_excel_sem_duplicados(
+    caminho: str | PathLike[str],
+    novos: Sequence[Mapping[str, Any]] | pd.DataFrame,
+    sheet_name: Literal["produtos", "assinaturas"],
+) -> int:
+    """
+    Salva/atualiza uma planilha Excel garantindo que não haja duplicados
+    na aba indicada. Retorna a quantidade de registros efetivamente adicionados.
 
+    - caminho: caminho do arquivo .xlsx
+    - novos: sequência de registros (dict-like) ou um DataFrame já pronto
+    - sheet_name: "produtos" | "assinaturas"
+    """
+    # normaliza caminho para str (compatível com os.path / pandas)
+    caminho_str = os.fspath(caminho)
+
+    # normaliza entrada para DataFrame
+    if isinstance(novos, pd.DataFrame):
+        novos_df: pd.DataFrame = novos.copy()
+    else:
+        novos_df = pd.DataFrame(list(novos))
+
+    # chave de deduplicação por aba
     if sheet_name == "produtos":
-        chave_unica = ["transaction_id"]
+        chave_unica: list[str] = ["transaction_id"]
     elif sheet_name == "assinaturas":
         chave_unica = ["subscription_id", "ano", "periodicidade", "periodo"]
     else:
-        raise ValueError(f"Aba desconhecida: {sheet_name}")
+        raise ValueError(f"Aba desconhecida: {sheet_name!r}")
 
-    escritor_existente = os.path.exists(caminho)
-    todas_abas = {}
+    escritor_existente = os.path.exists(caminho_str)
+    todas_abas: dict[str, pd.DataFrame] = {}
 
     if escritor_existente:
         try:
-            todas_abas = pd.read_excel(caminho, sheet_name=None)
-            existentes = todas_abas.get(sheet_name, pd.DataFrame())
+            # carrega todas as abas existentes
+            lidas = pd.read_excel(caminho_str, sheet_name=None)
+            # mypy: garantimos o tipo de volta
+            todas_abas = dict(lidas) if isinstance(lidas, dict) else {}
+            existentes: pd.DataFrame = todas_abas.get(sheet_name, pd.DataFrame())
             tamanho_antes = len(existentes)
 
             combinado = pd.concat([existentes, novos_df], ignore_index=True)
@@ -5112,20 +5471,23 @@ def salvar_em_excel_sem_duplicados(caminho, novos, sheet_name):
 
     todas_abas[sheet_name] = combinado
 
+    adicionados = tamanho_depois - tamanho_antes
+
     try:
-        with pd.ExcelWriter(caminho, engine="openpyxl", mode="w") as writer:
+        with pd.ExcelWriter(caminho_str, engine="openpyxl", mode="w") as writer:
             for aba, dfw in todas_abas.items():
                 dfw.to_excel(writer, sheet_name=aba, index=False)
-        adicionados = tamanho_depois - tamanho_antes
         print(f"[💾] {adicionados} novo(s) registro(s) adicionado(s) em '{sheet_name}'")
     except Exception as e:
         print(f"[❌] Erro ao salvar Excel: {e}")
+
+    return adicionados
 
 
 # Integração com a API da Shopify
 
 
-def normalizar_transaction_id(valor):
+def normalizar_transaction_id(valor: str | int) -> str:
     if isinstance(valor, str):
         valor = valor.strip()
         if "gid://" in valor and "/" in valor:
@@ -5176,13 +5538,18 @@ class SinaisBuscarPedidos(QObject):
 
 
 class ObterCpfShopifyRunnable(QRunnable):
-    def __init__(self, order_id, estado, sinal_finalizacao=None):
+    def __init__(
+        self,
+        order_id: str,
+        estado: MutableMapping[str, Any],
+        sinal_finalizacao: _SinalFinalizacao | None = None,
+    ) -> None:
         super().__init__()
-        self.order_id = normalizar_transaction_id(order_id)
-        self.estado = estado
-        self.signals = SinaisObterCpf()
-        self.sinal_finalizacao = sinal_finalizacao
-        self._parent_correlation_id = get_correlation_id()
+        self.order_id: str = normalizar_transaction_id(order_id)
+        self.estado: MutableMapping[str, Any] = estado
+        self.signals: SinaisObterCpf = SinaisObterCpf()
+        self.sinal_finalizacao: _SinalFinalizacao | None = sinal_finalizacao
+        self._parent_correlation_id: str = get_correlation_id()
 
     @pyqtSlot()
     def run(self) -> None:
@@ -5218,11 +5585,16 @@ class ObterCpfShopifyRunnable(QRunnable):
                 "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
             }
 
-            with controle_shopify["lock"]:
-                delta = time.time() - controle_shopify["ultimo_acesso"]
+            # ---- Tipagem explícita do controle/lock e do timestamp ----
+            ctrl: MutableMapping[str, Any] = cast(MutableMapping[str, Any], controle_shopify)
+            lock_cm: AbstractContextManager[Any] = cast(AbstractContextManager[Any], ctrl["lock"])
+            with lock_cm:
+                ultimo: float = float(cast(Any, ctrl.get("ultimo_acesso", 0.0)))
+                agora: float = time.time()
+                delta: float = agora - ultimo
                 if delta < MIN_INTERVALO_GRAPHQL:
                     time.sleep(MIN_INTERVALO_GRAPHQL - delta)
-                controle_shopify["ultimo_acesso"] = time.time()
+                ctrl["ultimo_acesso"] = agora
 
             if self.estado["cancelador_global"].is_set():
                 logger.warning("cpf_lookup_cancelled_mid", extra={"order_id": self.order_id})
@@ -5245,7 +5617,7 @@ class ObterCpfShopifyRunnable(QRunnable):
                     .get("edges", [])
                 )
                 for edge in edges:
-                    node: dict[str, Any] = edge.get("node", {})  # type: ignore[assignment]
+                    node: dict[str, Any] = edge.get("node", {})
                     if node.get("purpose") == "TAX" and "cpf" in str(node.get("title", "")).lower():
                         cpf = re.sub(r"\D", "", str(node.get("value", "")))[:11]
                         break
@@ -5770,9 +6142,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
 
         # memória de custos/limites para rate-limit pró-ativo
         self._ultimo_requested_cost: float = 150.0  # palpite inicial
-        self._ultimo_throttle_status: ThrottleStatus | None = (
-            None  # maximumAvailable/currentlyAvailable/restoreRate
-        )
+        self._ultimo_throttle_status: ThrottleStatus | None = None
 
         # garante estruturas básicas no estado (evita KeyError)
         self.estado.setdefault("dados_temp", {})
@@ -5782,8 +6152,9 @@ class BuscarPedidosPagosRunnable(QRunnable):
         self.estado["dados_temp"].setdefault("status_fulfillment", {})
         self.estado["dados_temp"].setdefault("fretes", {})
         self.estado["dados_temp"].setdefault("descontos", {})
+        self.estado["dados_temp"].setdefault("itens_por_pedido", {})
 
-    # ---- helper: imprime contexto e emite sinal de erro ----
+    # ---- helpers de log/limite ----
     def _log_erro(
         self,
         titulo: str,
@@ -5822,7 +6193,6 @@ class BuscarPedidosPagosRunnable(QRunnable):
             except Exception:
                 pass
 
-            # erros GraphQL detalhados (se houver)
             try:
                 payload = resp.json()
                 if isinstance(payload, dict) and "errors" in payload:
@@ -5849,10 +6219,8 @@ class BuscarPedidosPagosRunnable(QRunnable):
         msg_ui = titulo
         if detalhe:
             msg_ui += f" - {detalhe}"
-        # sinais é PyQt; deixamos tipado como Any para mypy não barrar o .emit
         self.sinais.erro.emit(f"❌ {msg_ui}")
 
-    # --- helper: quanto esperar para ter 'needed' créditos disponíveis ---
     def _calc_wait_seconds(self, throttle_status: Mapping[str, Any] | None, needed: float) -> float:
         if not throttle_status:
             return 0.0
@@ -5866,7 +6234,6 @@ class BuscarPedidosPagosRunnable(QRunnable):
         deficit = needed - available
         return max(0.0, deficit / restore)
 
-    # --- helper: esperar pró-ativamente antes da requisição ---
     def _esperar_creditos_se_preciso(self) -> None:
         needed = max(50.0, float(self._ultimo_requested_cost or 100.0))
         wait_s = self._calc_wait_seconds(self._ultimo_throttle_status, needed)
@@ -5874,7 +6241,6 @@ class BuscarPedidosPagosRunnable(QRunnable):
             print(f"⏳ Aguardando {wait_s:.2f}s para recuperar créditos (precisa ~{needed:.0f}).")
             time.sleep(wait_s)
 
-    # --- helper: extrair infos de custo/throttle do payload e guardar ---
     def _atualizar_custos(self, payload: Mapping[str, Any]) -> None:
         extensions = cast(dict[str, Any], (payload or {}).get("extensions", {}))
         cost = cast(dict[str, Any], extensions.get("cost", {}) or {})
@@ -5894,6 +6260,106 @@ class BuscarPedidosPagosRunnable(QRunnable):
             }
         else:
             self._ultimo_throttle_status = None
+
+    # ---- helpers de combo/sku ----
+    def _buscar_info_por_sku(self, skus_info: dict[str, Any], sku: str) -> dict[str, Any] | None:
+        sku_norm = (sku or "").strip().upper()
+        if not sku_norm:
+            return None
+        for info in skus_info.values():
+            try:
+                v = str(info.get("sku", "")).strip().upper()
+            except Exception:
+                v = ""
+            if v and v == sku_norm:
+                return cast(dict[str, Any], info)
+        return None
+
+    def _expandir_line_items_por_regras(
+        self,
+        pedido: Pedido,
+        skus_info: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """
+        Retorna uma lista de dicts "itens_expandidos" a partir de pedido.lineItems:
+        - Se não for combo: [{'sku', 'quantity', 'line_item_id'}]
+        - Se combo indisponível e mapeado: [{'sku', 'quantity', 'line_item_id', 'combo_indisponivel': True}]
+        - Se combo normal: componentes multiplicados, todos com o MESMO 'line_item_id' do line item original.
+        """
+        itens_expandidos: list[dict[str, Any]] = []
+        li_edges = cast(
+            list[dict[str, Any]], (pedido.get("lineItems") or {}).get("edges", []) or []
+        )
+        for li_edge in li_edges:
+            node = cast(dict[str, Any], li_edge.get("node") or {})
+
+            # Shopify LineItem GID -> normaliza para id numérico/string curta do seu projeto
+            line_item_gid = str(node.get("id", "") or "")
+            line_item_id = normalizar_transaction_id(line_item_gid)
+
+            sku_li = str(node.get("sku", "") or "").strip()
+            qty_li = int(node.get("quantity") or 0)
+            if qty_li <= 0:
+                continue
+
+            info = self._buscar_info_por_sku(skus_info, sku_li)
+            # não é combo
+            if not info or not info.get("composto_de"):
+                itens_expandidos.append(
+                    {
+                        "sku": sku_li,
+                        "quantity": qty_li,
+                        "is_combo": False,
+                        "line_item_id": line_item_id,  # ✅ precisa para fulfillment
+                    }
+                )
+                continue
+
+            # combo → aplicar regra de pré-venda (não desmembrar)
+            mapeado = bool(info.get("guru_ids")) and bool(info.get("shopify_ids"))
+            indisponivel = bool(info.get("indisponivel"))
+            if indisponivel and mapeado:
+                itens_expandidos.append(
+                    {
+                        "sku": sku_li,
+                        "quantity": qty_li,
+                        "is_combo": True,
+                        "combo_indisponivel": True,
+                        "line_item_id": line_item_id,  # ✅ ainda assim carregamos o id
+                    }
+                )
+                continue
+
+            # desmembrar componentes → TODOS herdam o mesmo line_item_id
+            comp_list = cast(list[dict[str, Any]], info.get("composto_de") or [])
+            add_any = False
+            for comp in comp_list:
+                comp_sku = str(comp.get("sku") or comp.get("SKU") or "").strip()
+                comp_qty = int(comp.get("qtd") or comp.get("quantity") or 1)
+                if comp_sku:
+                    itens_expandidos.append(
+                        {
+                            "sku": comp_sku,
+                            "quantity": comp_qty * qty_li,
+                            "from_combo": sku_li,
+                            "is_combo_component": True,
+                            "line_item_id": line_item_id,  # ✅ mesmo id para todas as linhas do combo
+                        }
+                    )
+                    add_any = True
+            if not add_any:
+                # fallback: sem componentes válidos, mantém o combo “inteiro”
+                itens_expandidos.append(
+                    {
+                        "sku": sku_li,
+                        "quantity": qty_li,
+                        "is_combo": True,
+                        "combo_sem_componentes": True,
+                        "line_item_id": line_item_id,  # ✅ mantém id
+                    }
+                )
+
+        return itens_expandidos
 
     @pyqtSlot()
     def run(self) -> None:
@@ -6000,7 +6466,6 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 logger.warning("shopify_fetch_cancelled_midloop")
                 break
 
-            # ⭐ espera proativa com base no último throttleStatus
             self._esperar_creditos_se_preciso()
 
             # --- chamada HTTP ---
@@ -6060,7 +6525,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 )
                 return
 
-            # Atualiza memória de custos/throttle para as próximas iterações
+            # custos/throttle
             self._atualizar_custos(payload)
 
             # --- Erros GraphQL? ---
@@ -6074,7 +6539,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
                     needed = float(self._ultimo_requested_cost or 100.0)
                     wait_s = self._calc_wait_seconds(self._ultimo_throttle_status, needed)
                     if wait_s <= 0:
-                        wait_s = 1.5  # fallback conservador
+                        wait_s = 1.5
                     print(f"⏳ THROTTLED - aguardando {wait_s:.2f}s e tentando novamente...")
                     time.sleep(wait_s)
                     continue
@@ -6106,15 +6571,10 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 if not pedido:
                     continue
 
-                # (loop de itens mantido apenas se quiser depurar algo)
-                itens = cast(dict[str, Any], pedido.get("lineItems") or {}).get("edges", []) or []
-                for item_edge in cast(list[dict[str, Any]], itens):
-                    item = cast(dict[str, Any], item_edge.get("node") or {})
-                    _ = item.get("title", "")
-                    _ = item.get("quantity", "")
-                    _ = str(cast(dict[str, Any], item.get("product") or {}).get("id", "")).split(
-                        "/"
-                    )[-1]
+                # --- EXPANSÃO DE ITENS: prioridade por SKU e regra de combo ---
+                skus_info = cast(dict[str, Any], self.estado.get("skus_info", {}))
+                itens_expandidos = self._expandir_line_items_por_regras(pedido, skus_info)
+                pedido["itens_expandidos"] = itens_expandidos  # para uso posterior
 
                 # CPF via localizationExtensions
                 cpf = ""
@@ -6164,6 +6624,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
             pedido_id = normalizar_transaction_id(pid_raw)
             dados_temp["cpfs"][pedido_id] = pedido.get("cpf_extraido", "")
             dados_temp["bairros"][pedido_id] = ""
+
             end = cast(dict[str, Any], pedido.get("shippingAddress") or {})
             dados_temp["enderecos"][pedido_id] = {
                 "endereco_base": end.get("address1", ""),
@@ -6177,7 +6638,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
             )
             dados_temp["status_fulfillment"][pedido_id] = status_fulfillment
 
-            # frete (robusto a None)
+            # frete
             valor_frete_any = (
                 cast(dict[str, Any], (pedido.get("shippingLine") or {})).get("discountedPriceSet")
                 or {}
@@ -6190,7 +6651,7 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 valor_frete = 0.0
             dados_temp["fretes"][pedido_id] = valor_frete
 
-            # desconto (robusto a None)
+            # desconto
             valor_desc_any = (
                 cast(dict[str, Any], (pedido.get("currentTotalDiscountsSet") or {})).get(
                     "shopMoney"
@@ -6205,7 +6666,11 @@ class BuscarPedidosPagosRunnable(QRunnable):
                 valor_desconto = 0.0
             dados_temp["descontos"][pedido_id] = valor_desconto
 
-        # sinais PyQt (ignoramos tipagem do .emit)
+            # salva os itens expandidos por pedido (se existirem)
+            itens_expandidos = cast(list[dict[str, Any]], pedido.get("itens_expandidos") or [])
+            cast(dict[str, Any], dados_temp["itens_por_pedido"])[pedido_id] = itens_expandidos
+
+        # sinais PyQt
         self.sinais.resultado.emit(pedidos)
 
 
@@ -7077,11 +7542,10 @@ def atualizar_planilha_shopify(
         return
 
     df_any = estado.get("df_temp")
-    df: pd.DataFrame
     if not isinstance(df_any, pd.DataFrame) or df_any.empty:
         logger.warning("[⚠️] DataFrame temporário não encontrado.")
         return
-    df = df_any
+    df: pd.DataFrame = df_any
 
     logger.info("[✅] Todos os dados foram coletados. Atualizando a planilha...")
 
@@ -7119,14 +7583,64 @@ def atualizar_planilha_shopify(
         if col in df.columns:
             df[col] = df[col].apply(limpar_telefone)
 
-    # -- NOVO: coluna "indisponivel" baseada no skus.json --
-    if "Produto" in df.columns:
-        try:
-            df["indisponivel"] = df["Produto"].apply(
-                lambda n: "S" if eh_indisponivel(str(n)) else "N"
+    # ---------- indisponibilidade com preferência por SKU ----------
+    try:
+        _skus_info: dict[str, Any] = estado.get("skus_info", {})  # mapeamento do skus.json
+        # garante colunas para a verificação
+        if "SKU" not in df.columns:
+            df["SKU"] = ""
+        if "Produto" not in df.columns:
+            df["Produto"] = ""
+        # aplica preferência por SKU; fallback por nome
+        df["indisponivel"] = [
+            "S" if eh_indisponivel(str(nome or ""), sku=str(sku or "")) else "N"
+            for sku, nome in zip(df["SKU"], df["Produto"], strict=False)
+        ]
+    except Exception as e:
+        logger.exception(f"[⚠️] Falha ao calcular 'indisponivel' (preferência por SKU): {e}")
+
+    # ---------- preencher id_line_item por SKU a partir da coleta ----------
+    try:
+        itens_por_pedido: dict[str, list[dict[str, Any]]] = (
+            estado.get("dados_temp", {}).get("itens_por_pedido", {}) or {}
+        )
+        if "id_line_item" not in df.columns:
+            df["id_line_item"] = ""
+
+        # normalizações auxiliares
+        df["transaction_id"] = df["transaction_id"].astype(str).str.strip()
+        df["SKU"] = df["SKU"].astype(str).str.strip()
+        # cria uma cópia normalizada para map por SKU
+        df["_SKU_NORM_TMP"] = df["SKU"].str.upper()
+
+        for pedido_id, itens in itens_por_pedido.items():
+            pid = normalizar_transaction_id(pedido_id)
+            idx_pedido = df["transaction_id"].eq(pid)
+            if not idx_pedido.any():
+                continue
+
+            # monta mapa SKU->line_item_id (primeira ocorrência prevalece)
+            sku_to_lineid: dict[str, str] = {}
+            for it in itens:
+                sku = str(it.get("sku", "")).strip().upper()
+                li = str(it.get("line_item_id", "")).strip()
+                if sku and li and sku not in sku_to_lineid:
+                    sku_to_lineid[sku] = li
+
+            if not sku_to_lineid:
+                continue
+
+            # aplica mapeamento no bloco do pedido
+            df.loc[idx_pedido, "id_line_item"] = (
+                df.loc[idx_pedido, "_SKU_NORM_TMP"]
+                .map(sku_to_lineid)
+                .fillna(df.loc[idx_pedido, "id_line_item"])
             )
-        except Exception as e:
-            logger.exception(f"[⚠️] Falha ao calcular 'indisponivel': {e}")
+
+        # limpa coluna auxiliar
+        df.drop(columns=["_SKU_NORM_TMP"], inplace=True)
+    except Exception as e:
+        logger.exception(f"[erro] Falha ao preencher id_line_item por SKU: {e}")
 
     # 🔁 restaura frete, status e desconto capturados em tratar_resultado (se existirem)
     if "fretes_shopify" in estado:
