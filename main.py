@@ -196,12 +196,6 @@ def slot_mostrar_mensagem(
 comunicador_global.mostrar_mensagem.connect(slot_mostrar_mensagem)
 
 
-class _CliCfg(Protocol):
-    input_path: str
-    output_dir: str
-    dry_run: bool
-
-
 def caminho_base() -> str:
     """Diretório onde está o main.py (independe do cwd)."""
     return os.path.dirname(os.path.abspath(__file__))
@@ -1434,44 +1428,6 @@ ASSINATURAS_BIMESTRAIS = ASSINATURAS.get("bimestral", [])
 ASSINATURAS_ANUAIS = ASSINATURAS.get("anual", [])
 ASSINATURAS_BIANUAIS = ASSINATURAS.get("bianual", [])
 ASSINATURAS_TRIANUAIS = ASSINATURAS.get("trianual", [])
-
-# API SHOPIFY
-
-
-def obter_api_shopify_version(now: datetime | None = None) -> str:
-    """Retorna a versão trimestral da Shopify API (YYYY-01/04/07/10).
-
-    Usa datetime aware (UTC por padrão). 'now' é opcional (útil para testes).
-    """
-    dt = now or datetime.now(UTC)
-    y, m = dt.year, dt.month
-    q_start = ((m - 1) // 3) * 3 + 1  # 1, 4, 7, 10
-    return f"{y}-{q_start:02d}"
-
-
-API_VERSION = obter_api_shopify_version()
-GRAPHQL_URL = f"https://{settings.SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
-
-
-class _DadosTemp(TypedDict, total=False):
-    cpfs: dict[str, Any]
-    bairros: dict[str, Any]
-    enderecos: dict[str, Any]
-
-
-# Inicializa/garante o tipo de estado["dados_temp"] apenas aqui
-dt = cast(_DadosTemp, estado.setdefault("dados_temp", {}))
-dt.setdefault("cpfs", {})
-dt.setdefault("bairros", {})
-dt.setdefault("enderecos", {})
-
-# Controle de taxa global
-controle_shopify = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
-MIN_INTERVALO_GRAPHQL = 0.1  # 100ms (100 chamadas/s)
-
-# API OPENAI
-
-client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 # Gerenciamento de barra de progresso na interface.
@@ -5276,6 +5232,44 @@ def salvar_em_excel_sem_duplicados(
 
 
 # Integração com a API da Shopify
+
+# API SHOPIFY
+
+
+def obter_api_shopify_version(now: datetime | None = None) -> str:
+    """Retorna a versão trimestral da Shopify API (YYYY-01/04/07/10).
+
+    Usa datetime aware (UTC por padrão). 'now' é opcional (útil para testes).
+    """
+    dt = now or datetime.now(UTC)
+    y, m = dt.year, dt.month
+    q_start = ((m - 1) // 3) * 3 + 1  # 1, 4, 7, 10
+    return f"{y}-{q_start:02d}"
+
+
+API_VERSION = obter_api_shopify_version()
+GRAPHQL_URL = f"https://{settings.SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
+
+
+class _DadosTemp(TypedDict, total=False):
+    cpfs: dict[str, Any]
+    bairros: dict[str, Any]
+    enderecos: dict[str, Any]
+
+
+# Inicializa/garante o tipo de estado["dados_temp"] apenas aqui
+dt = cast(_DadosTemp, estado.setdefault("dados_temp", {}))
+dt.setdefault("cpfs", {})
+dt.setdefault("bairros", {})
+dt.setdefault("enderecos", {})
+
+# Controle de taxa global
+controle_shopify = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
+MIN_INTERVALO_GRAPHQL = 0.1  # 100ms (100 chamadas/s)
+
+# API OPENAI
+
+client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 def normalizar_transaction_id(valor: str | int) -> str:

@@ -32,6 +32,12 @@ ignore = ["E203", "E501"]
 "main.py" = [
   "PLR" # refatorações de complexidade (por ora)
 ]
+"backend.py" = [
+  "PLR" # idem
+]
+"frontend.py" = [
+  "PLR" # idem
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "src", "common"]
@@ -43,8 +49,12 @@ ignore_missing_imports = false
 follow_imports = "silent"
 namespace_packages = true
 explicit_package_bases = true
-
-# endurece aos poucos:
 disallow_untyped_defs = true
 warn_return_any = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["backend", "frontend"]
+disallow_untyped_defs = false
+warn_return_any = false
+ignore_missing_imports = true
