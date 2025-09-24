@@ -9,9 +9,7 @@ from .errors import UserError
 
 
 class JobConfig(BaseModel):
-    """
-    Exemplo de config de tarefa — adapte aos campos do seu domínio.
-    """
+    """Exemplo de config de tarefa — adapte aos campos do seu domínio."""
 
     input_path: str = Field(min_length=1)
     output_dir: str = Field(min_length=1)
@@ -28,9 +26,7 @@ class JobConfig(BaseModel):
 
 
 def validate_config(payload: dict[str, Any]) -> JobConfig:
-    """
-    Converte o dicionário em JobConfig e converte ValidationError em UserError.
-    """
+    """Converte o dicionário em JobConfig e converte ValidationError em UserError."""
     try:
         # mypy às vezes não infere corretamente o tipo retornado
         return cast(JobConfig, JobConfig.model_validate(payload))
@@ -44,8 +40,8 @@ def validate_config(payload: dict[str, Any]) -> JobConfig:
 
 
 def ensure_paths(cfg: JobConfig) -> None:
-    """
-    Checagens de existência/permissão de caminhos antes de processar.
+    """Checagens de existência/permissão de caminhos antes de processar.
+
     Não altera estado além de criar a pasta de saída se necessário.
     """
     in_path = Path(cfg.input_path)

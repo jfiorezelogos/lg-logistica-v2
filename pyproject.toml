@@ -1,9 +1,9 @@
 [tool.black]
-line-length = 100
+line-length = 120
 target-version = ["py313"]
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py313"
 
 [tool.ruff.lint]
@@ -25,11 +25,10 @@ select = [
   "E741",  # variáveis com nomes confusos
   "RUF013" # Optional implícito
 ]
-# Black decide a quebra de linha
+# Black decide a quebra de linha; ignoramos E501
 ignore = ["E203", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# Mantemos só o essencial no main.py para não travar PRs enquanto ele é grande
 "main.py" = [
   "PLR" # refatorações de complexidade (por ora)
 ]
@@ -46,6 +45,6 @@ namespace_packages = true
 explicit_package_bases = true
 
 # endurece aos poucos:
-disallow_untyped_defs = true      # exige tipagem em todas as funções/def novas
-warn_return_any = true            # alerta se função retorna Any
-warn_unused_ignores = true        # reclama se tiver "# type: ignore" inútil
+disallow_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true

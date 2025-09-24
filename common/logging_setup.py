@@ -74,9 +74,7 @@ class UtcJsonFormatter(jsonlogger.JsonFormatter):
         kwargs.setdefault("timestamp", True)
         kwargs.setdefault("json_ensure_ascii", False)
         kwargs.setdefault("json_indent", None)
-        kwargs.setdefault(
-            "rename_fields", {"asctime": "ts", "levelname": "level", "message": "msg"}
-        )
+        kwargs.setdefault("rename_fields", {"asctime": "ts", "levelname": "level", "message": "msg"})
         # se o stub reclamar dos kwargs, habilite a linha abaixo:
         # super().__init__(*args, **kwargs)  # type: ignore[call-arg]
         super().__init__(*args, **kwargs)
@@ -88,11 +86,7 @@ class UtcJsonFormatter(jsonlogger.JsonFormatter):
         message_dict: dict[str, Any],
     ) -> None:
         super().add_fields(log_record, record, message_dict)
-        if (
-            "ts" in log_record
-            and isinstance(log_record["ts"], str)
-            and not log_record["ts"].endswith("Z")
-        ):
+        if "ts" in log_record and isinstance(log_record["ts"], str) and not log_record["ts"].endswith("Z"):
             log_record["ts"] += "Z"
 
 
@@ -182,8 +176,8 @@ def setup_logging(
 # Helpers
 # ---------------------------
 def set_correlation_id(value: str | None = None) -> str:
-    """
-    Define (ou gera) o correlation_id para o contexto atual.
+    """Define (ou gera) o correlation_id para o contexto atual.
+
     Retorna o valor definido.
     """
     cid = value or str(uuid.uuid4())

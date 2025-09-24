@@ -1,11 +1,11 @@
-# common/cli_safe.py
 from __future__ import annotations
 
 import functools
 import os
 import sys
 import traceback
-from collections.abc import Callable  # <- aqui
+from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from .errors import AppError, to_user_message
@@ -15,17 +15,19 @@ def _is_debug_enabled() -> bool:
     val = os.getenv("DEBUG")
     if val is None:
         return "--debug" in sys.argv
-    return val not in ("0", "false", "False", "")
+    return str(val).strip().lower() in {"1", "true", "on", "yes"}
 
 
 def safe_cli(main_func: Callable[..., int | None]) -> Callable[..., int]:
-    """
-    Decorator para pontos de entrada de CLI.
-    - Sucesso: 0
-    - AppError (prevista/negócio): 2
-    - Erro inesperado: 1
-    - Ctrl+C: 130
-    Em DEBUG (DEBUG=1/true ou --debug), imprime traceback completo.
+    """Decorator para pontos de entrada de CLI.
+
+    Convencões:
+      - Sucesso: 0
+      - AppError (erro previsto/negócio): 2
+      - Erro inesperado: 1
+      - Ctrl+C (KeyboardInterrupt): 130
+
+    Em DEBUG (DEBUG=1/true/on/yes ou --debug), imprime traceback completo.
     """
 
     @functools.wraps(main_func)
@@ -37,15 +39,16 @@ def safe_cli(main_func: Callable[..., int | None]) -> Callable[..., int]:
         except KeyboardInterrupt:
             status = 130
         except BrokenPipeError:
-            try:
+            with suppress(Exception):
                 sys.stdout.flush()
-            except Exception:
-                pass
             status = 0
         except SystemExit as e:
-            try:
-                status = int(e.code) if e.code is not None else 1
-            except Exception:
+            code = e.code
+            if code is None:
+                status = 0
+            elif isinstance(code, int):
+                status = code
+            else:
                 status = 1
         except Exception as exc:
             debug = _is_debug_enabled()

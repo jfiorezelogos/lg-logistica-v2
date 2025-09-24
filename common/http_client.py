@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import time
 from functools import lru_cache
 from typing import Any
 
@@ -26,10 +27,9 @@ def _build_retry(
     statuses: tuple[int, ...] = TRANSIENT_STATUSES,
     methods: frozenset[str] = IDEMPOTENT_METHODS,
 ) -> Retry:
-    """
-    Cria política de retry exponencial com respeito a Retry-After (429/503).
-    Compatível com urllib3 novo (allowed_methods) e antigo (method_whitelist),
-    sem esbarrar no mypy.
+    """Cria política de retry exponencial com respeito a Retry-After (429/503).
+
+    Compatível com urllib3 novo (allowed_methods) e antigo (method_whitelist), sem esbarrar no mypy.
     """
     common_kwargs: dict[str, Any] = {
         "total": total,
@@ -77,8 +77,8 @@ def _get_cached_session() -> requests.Session:
 
 
 def get_session(session: requests.Session | None = None) -> requests.Session:
-    """
-    Retorna uma sessão global com retries/backoff configurados.
+    """Retorna uma sessão global com retries/backoff configurados.
+
     Permite ser trocada em testes passando `session=` nas funções http_*.
     """
     return session or _get_cached_session()
@@ -89,16 +89,13 @@ def get_session(session: requests.Session | None = None) -> requests.Session:
 
 
 def http_get(url: str, **kwargs: Any) -> requests.Response:
-    """
-    GET com timeout padrão, retries exponenciais (inclui 429/5xx),
-    e tradução de erros para ExternalError.
-    """
+    """GET com timeout padrão, retries exponenciais (inclui 429/5xx), e tradução de erros para
+    ExternalError."""
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     session: requests.Session = kwargs.pop("session", get_session())
     jitter_max: float = kwargs.pop("jitter_max", 0.0)
 
     if jitter_max and jitter_max > 0:
-        import time
 
         time.sleep(random.uniform(0, jitter_max))
 
@@ -139,16 +136,13 @@ def http_get(url: str, **kwargs: Any) -> requests.Response:
 
 
 def http_post(url: str, **kwargs: Any) -> requests.Response:
-    """
-    POST com timeout padrão, retries (inclui 429/5xx, respeita Retry-After),
-    e tradução de erros para ExternalError.
-    """
+    """POST com timeout padrão, retries (inclui 429/5xx, respeita Retry-After), e tradução de erros
+    para ExternalError."""
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     session: requests.Session = kwargs.pop("session", get_session())
     jitter_max: float = kwargs.pop("jitter_max", 0.0)
 
     if jitter_max and jitter_max > 0:
-        import time
 
         time.sleep(random.uniform(0, jitter_max))
 
