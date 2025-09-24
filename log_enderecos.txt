@@ -8441,3 +8441,623 @@ Pedido 7080280522942:
   🧾 Logradouro oficial (CEP): 
   🏘️ Bairro oficial (CEP): 
 --------------------------------------------------
+Pedido 7064980947134:
+  📥 address1 (usuário): Rua Amâncio Pereira, 400
+  📥 address2 (usuário): Casa 01
+  ✅ Endereço base: Rua Amâncio Pereira
+  🏷️ Número: 400
+  🧩 Complemento: Casa 01
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Amâncio Pereira
+  🏘️ Bairro oficial (CEP): Passaré
+--------------------------------------------------
+Pedido 7066166886590:
+  📥 address1 (usuário): Rua Marechal Deodoro, 414
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Marechal Deodoro
+  🏷️ Número: 414
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7069448175806:
+  📥 address1 (usuário): Rua Itajai, n 390
+  📥 address2 (usuário): Ap 801
+  ✅ Endereço base: Rua Itajai
+  🏷️ Número: n 390
+  🧩 Complemento: Ap 801
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Itajaí
+  🏘️ Bairro oficial (CEP): Centro
+--------------------------------------------------
+Pedido 7069183639742:
+  📥 address1 (usuário): Rua Luiz Furlan, 68
+  📥 address2 (usuário): Sem complemento.
+  ✅ Endereço base: Rua Luiz Furlan
+  🏷️ Número: 68
+  🧩 Complemento: Sem complemento.
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Luiz Furlan
+  🏘️ Bairro oficial (CEP): Jardim dos Cedros
+--------------------------------------------------
+Pedido 7071837749438:
+  📥 address1 (usuário): Rua Portugal, 57
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Portugal
+  🏷️ Número: 57
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Portugal
+  🏘️ Bairro oficial (CEP): Centro
+--------------------------------------------------
+Pedido 7072114639038:
+  📥 address1 (usuário): Av. Governador Celso Ramos, 323
+  📥 address2 (usuário): -
+  ✅ Endereço base: Av. Governador Celso Ramos
+  🏷️ Número: 323
+  🧩 Complemento: -
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7066778304702:
+  📥 address1 (usuário): Avenida João Frederico Ferreira Gomes, 420
+  📥 address2 (usuário): Apto 1303
+  ✅ Endereço base: Avenida João Frederico Ferreira Gomes
+  🏷️ Número: 420
+  🧩 Complemento: Apto 1303
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Deputado João Frederico Ferreira Gomes
+  🏘️ Bairro oficial (CEP): Junco
+--------------------------------------------------
+Pedido 7071560597694:
+  📥 address1 (usuário): Rua Jasiel de Brito Côrtes, 543
+  📥 address2 (usuário): Cond. José Rosa, b.03, ap. 403
+  ✅ Endereço base: Rua Jasiel de Brito Côrtes
+  🏷️ Número: 543
+  🧩 Complemento: Cond. José Rosa, b.03, ap. 403
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Jasiel de Brito Côrtes
+  🏘️ Bairro oficial (CEP): Jabotiana
+--------------------------------------------------
+Pedido 7072280838334:
+  📥 address1 (usuário): Rua Girassol,  988
+  📥 address2 (usuário): 31
+  ✅ Endereço base: Rua Girassol
+  🏷️ Número: 988
+  🧩 Complemento: 31
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Girassol
+  🏘️ Bairro oficial (CEP): Vila Madalena
+--------------------------------------------------
+Pedido 7072951795902:
+  📥 address1 (usuário): Rua Silva Mourão, 89
+  📥 address2 (usuário): Apt 103
+  ✅ Endereço base: Rua Silva Mourão
+  🏷️ Número: 89
+  🧩 Complemento: Apt 103
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Silva Mourão
+  🏘️ Bairro oficial (CEP): Cachambi
+--------------------------------------------------
+Pedido 7071927369918:
+  📥 address1 (usuário): Rua Mário Totta, 157
+  📥 address2 (usuário): Hospital de Caridade Ponto de referência: Setor compras (fundos)
+  ✅ Endereço base: Rua Mário Totta
+  🏷️ Número: 157
+  🧩 Complemento: Hospital de Caridade Ponto de referência: Setor compras (fundos)
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7073028669630:
+  📥 address1 (usuário): Rua Ida Selani, 286
+  📥 address2 (usuário): Chácara
+  ✅ Endereço base: Rua Ida Selani
+  🏷️ Número: 286
+  🧩 Complemento: Chácara
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Ida Selani
+  🏘️ Bairro oficial (CEP): Parque Residencial Martinelli
+--------------------------------------------------
+Pedido 7074055127230:
+  📥 address1 (usuário): Rua Antônio Simão Mauad, 916
+  📥 address2 (usuário): casa
+  ✅ Endereço base: Rua Antônio Simão Mauad
+  🏷️ Número: 916
+  🧩 Complemento: casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Antônio Simão Mauad
+  🏘️ Bairro oficial (CEP): Pinheirinho
+--------------------------------------------------
+Pedido 7074197373118:
+  📥 address1 (usuário): Rua Paulo Uchoa, 2374, bairro São Mateus
+  📥 address2 (usuário): casa
+  ✅ Endereço base: Rua Paulo Uchoa
+  🏷️ Número: 2374, bairro São Mateus
+  🧩 Complemento: casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7074236596414:
+  📥 address1 (usuário): Condomínio Vila Firenze, 135
+  📥 address2 (usuário): Quadra 22/ Casa 07
+  ✅ Endereço base: Condomínio Vila Firenze
+  🏷️ Número: 135
+  🧩 Complemento: Quadra 22/ Casa 07
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Governador Hélio da Mota Gueiros
+  🏘️ Bairro oficial (CEP): Quarenta Horas (Coqueiro)
+--------------------------------------------------
+Pedido 7074494578878:
+  📥 address1 (usuário): Rua Professor Carlos Zagotis, 41
+  📥 address2 (usuário): Casa fundos
+  ✅ Endereço base: Rua Professor Carlos Zagotis
+  🏷️ Número: 41
+  🧩 Complemento: Casa fundos
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Professor Carlos Zagotis
+  🏘️ Bairro oficial (CEP): Tatuapé
+--------------------------------------------------
+Pedido 7074533933246:
+  📥 address1 (usuário): Rua São Felipe, 1395 - Canindezinho
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua São Felipe
+  🏷️ Número: 1395 - Canindezinho
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua São Felipe
+  🏘️ Bairro oficial (CEP): Canindezinho
+--------------------------------------------------
+Pedido 7074832777406:
+  📥 address1 (usuário): R. Dr João Satt, 25
+  📥 address2 (usuário): 202 B
+  ✅ Endereço base: R. Dr João Satt
+  🏷️ Número: 25
+  🧩 Complemento: 202 B
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Doutor João Satt
+  🏘️ Bairro oficial (CEP): Jardim Europa
+--------------------------------------------------
+Pedido 7075102326974:
+  📥 address1 (usuário): Rua José Benedito Viana de Moraes, 265
+  📥 address2 (usuário): Ap. 71-B
+  ✅ Endereço base: Rua José Benedito Viana de Moraes
+  🏷️ Número: 265
+  🧩 Complemento: Ap. 71-B
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua José Benedito Viana de Moraes
+  🏘️ Bairro oficial (CEP): Cidade São Francisco
+--------------------------------------------------
+Pedido 7075291791550:
+  📥 address1 (usuário): Rua Elson Nunes de Souza, 554
+  📥 address2 (usuário): Ap 702 Bloco 1
+  ✅ Endereço base: Rua Elson Nunes de Souza
+  🏷️ Número: 554
+  🧩 Complemento: Ap 702 Bloco 1
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Elson Nunes de Souza
+  🏘️ Bairro oficial (CEP): Castelo
+--------------------------------------------------
+Pedido 7075385868478:
+  📥 address1 (usuário): Rua Padre João Bosco Penido Burnier, 691
+  📥 address2 (usuário): Apto 604
+  ✅ Endereço base: Rua Padre João Bosco Penido Burnier
+  🏷️ Número: 691
+  🧩 Complemento: Apto 604
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Padre João Bosco Penido Burnier
+  🏘️ Bairro oficial (CEP): Camobi
+--------------------------------------------------
+Pedido 7075680977086:
+  📥 address1 (usuário): Rua Celso Almeida Coelho, 226
+  📥 address2 (usuário): Córrego Grande
+  ✅ Endereço base: Rua Celso Almeida Coelho
+  🏷️ Número: 226
+  🧩 Complemento: Córrego Grande
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Celso Almeida Coelho
+  🏘️ Bairro oficial (CEP): Córrego Grande
+--------------------------------------------------
+Pedido 7076796891326:
+  📥 address1 (usuário): Rua João Cipriano, 91
+  📥 address2 (usuário): Seminário Dom Orione
+  ✅ Endereço base: Rua João Cipriano
+  🏷️ Número: 91
+  🧩 Complemento: Seminário Dom Orione
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7076150673598:
+  📥 address1 (usuário): Rua Foz do Chopim, Nº 35, Vila São Francisco, Quadra 01
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Foz do Chopim
+  🏷️ Número: Nº 35, Vila São Francisco, Quadra 01
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7077016797374:
+  📥 address1 (usuário): Rua jose Borba Vasconcelos, 440
+  📥 address2 (usuário): Ap 121, torre 1
+  ✅ Endereço base: Rua jose Borba Vasconcelos
+  🏷️ Número: 440
+  🧩 Complemento: Ap 121, torre 1
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua José de Borba Vasconcelos
+  🏘️ Bairro oficial (CEP): Cocó
+--------------------------------------------------
+Pedido 7077114544318:
+  📥 address1 (usuário): Rua Bento Lisboa, 106
+  📥 address2 (usuário): Bloco 4 Ap 1108
+  ✅ Endereço base: Rua Bento Lisboa
+  🏷️ Número: 106
+  🧩 Complemento: Bloco 4 Ap 1108
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Bento Lisboa
+  🏘️ Bairro oficial (CEP): Catete
+--------------------------------------------------
+Pedido 7066896171198:
+  📥 address1 (usuário): SQS 213 Bloco C
+  📥 address2 (usuário): 306
+  ✅ Endereço base: Quadra SQS 213 Bloco C
+  🏷️ Número: 306
+  🧩 Complemento: 
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Quadra SQS 213 Bloco C
+  🏘️ Bairro oficial (CEP): Asa Sul
+--------------------------------------------------
+Pedido 7077185224894:
+  📥 address1 (usuário): Rua Marciano de Carvalho, 462 - Vila Nova
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Marciano de Carvalho
+  🏷️ Número: 462 - Vila Nova
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Marciano de Carvalho
+  🏘️ Bairro oficial (CEP): Centro
+--------------------------------------------------
+Pedido 7077220647102:
+  📥 address1 (usuário): Rua Floracy da Silva Barros, 252
+  📥 address2 (usuário): Vancouver
+  ✅ Endereço base: Rua Floracy da Silva Barros
+  🏷️ Número: 252
+  🧩 Complemento: Vancouver
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Floracy da Silva Barros
+  🏘️ Bairro oficial (CEP): Alto do Cruzeiro
+--------------------------------------------------
+Pedido 7065789563070:
+  📥 address1 (usuário): Rua Olavo Bilac 227
+  📥 address2 (usuário): apto 201
+  ✅ Endereço base: Rua Olavo Bilac
+  🏷️ Número: 227
+  🧩 Complemento: apto 201
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Olavo Bilac
+  🏘️ Bairro oficial (CEP): Cidade Alta
+--------------------------------------------------
+Pedido 7077294145726:
+  📥 address1 (usuário): Doutor Franco da Rocha, 201
+  📥 address2 (usuário): 1ª Companhia PM - Cb Mara
+  ✅ Endereço base: Doutor Franco da Rocha
+  🏷️ Número: 201
+  🧩 Complemento: 1ª Companhia PM - Cb Mara
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Doutor Franco da Rocha
+  🏘️ Bairro oficial (CEP): Vila Zanela
+--------------------------------------------------
+Pedido 7077689393342:
+  📥 address1 (usuário): Rua Heráclito Moreira, 1590
+  📥 address2 (usuário): Casa B
+  ✅ Endereço base: Rua Heráclito Moreira
+  🏷️ Número: 1590
+  🧩 Complemento: Casa B
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7077742084286:
+  📥 address1 (usuário): Avenida José Antonio de Barros, 314
+  📥 address2 (usuário): casa
+  ✅ Endereço base: Avenida José Antonio de Barros
+  🏷️ Número: 314
+  🧩 Complemento: casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida José Antônio de Barros
+  🏘️ Bairro oficial (CEP): Jardim Santa Clara
+--------------------------------------------------
+Pedido 7066326368446:
+  📥 address1 (usuário): Quadra Sqs 105 Bloco B
+  📥 address2 (usuário): 506
+  ✅ Endereço base: Quadra SQS 105 Bloco B
+  🏷️ Número: s/n
+  🧩 Complemento: 506
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Quadra SQS 105 Bloco B
+  🏘️ Bairro oficial (CEP): Asa Sul
+--------------------------------------------------
+Pedido 7066854850750:
+  📥 address1 (usuário): Av.Jose Moraes de Almeida 777
+  📥 address2 (usuário): Condomínio Quintas do Lago Q4 L19
+  ✅ Endereço base: Avenida José Morais de Almeida
+  🏷️ Número: 777
+  🧩 Complemento: Condomínio Quintas do Lago Q4 L19
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida José Morais de Almeida
+  🏘️ Bairro oficial (CEP): Coaçu
+--------------------------------------------------
+Pedido 7066167771326:
+  📥 address1 (usuário): Rua das Laranjeiras
+  📥 address2 (usuário): 43, Bloco B, Apt 303
+  ✅ Endereço base: Rua das Laranjeiras
+  🏷️ Número: 43
+  🧩 Complemento: Bloco B, Apt 303
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua das Laranjeiras
+  🏘️ Bairro oficial (CEP): Laranjeiras
+--------------------------------------------------
+Pedido 7078898237630:
+  📥 address1 (usuário): R. Alberto Valença, 166, Pituba
+  📥 address2 (usuário): Ap. 202
+  ✅ Endereço base: R. Alberto Valença
+  🏷️ Número: 166, Pituba
+  🧩 Complemento: Ap. 202
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Alberto Valença
+  🏘️ Bairro oficial (CEP): Pituba
+--------------------------------------------------
+Pedido 7068277735614:
+  📥 address1 (usuário): 1145
+  📥 address2 (usuário): Igreja católica Bom Jesus
+  ✅ Endereço base: Avenida Doutor Jambeiro Costa
+  🏷️ Número: 1145
+  🧩 Complemento: Igreja católica Bom Jesus
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Doutor Jambeiro Costa
+  🏘️ Bairro oficial (CEP): Centro
+--------------------------------------------------
+Pedido 7066834108606:
+  📥 address1 (usuário): Avenida Dom Pedro II 649
+  📥 address2 (usuário): trabalho de seg a sex das 9 as 15h
+  ✅ Endereço base: Avenida Dom Pedro II
+  🏷️ Número: 649
+  🧩 Complemento: trabalho de seg a sex das 9 as 15h
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Dom Pedro II
+  🏘️ Bairro oficial (CEP): Nova Rússia
+--------------------------------------------------
+Pedido 7066890567870:
+  📥 address1 (usuário): SQS 213 Bloco C
+  📥 address2 (usuário): 306
+  ✅ Endereço base: Quadra SQS 213 Bloco C
+  🏷️ Número: 306
+  🧩 Complemento: 
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Quadra SQS 213 Bloco C
+  🏘️ Bairro oficial (CEP): Asa Sul
+--------------------------------------------------
+Pedido 7079636828350:
+  📥 address1 (usuário): Módulo E,Lt.12, Recanto do Sossego, Setor Habitacional Mestre D'Armas  (Planaltina)
+  📥 address2 (usuário): casa
+  ✅ Endereço base: Módulo E
+  🏷️ Número: Lt.12, Recanto do Sossego, Setor Habitacional Mestre D'Armas  (Planaltina)
+  🧩 Complemento: casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Módulo Módulo E
+  🏘️ Bairro oficial (CEP): Recanto do Sossego (Planaltina)
+--------------------------------------------------
+Pedido 7068339077310:
+  📥 address1 (usuário): Rua 61
+  📥 address2 (usuário): Num 75 / Casa19/ Condomínio Bosque da Colina
+  ✅ Endereço base: Rua 61
+  🏷️ Número: 75
+  🧩 Complemento: Casa19/ Condomínio Bosque da Colina
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua 61
+  🏘️ Bairro oficial (CEP): Itaipu
+--------------------------------------------------
+Pedido 7080029716670:
+  📥 address1 (usuário): Rua Samambaia, 571
+  📥 address2 (usuário): apto 41 C1
+  ✅ Endereço base: Rua Samambaia
+  🏷️ Número: 571
+  🧩 Complemento: apto 41 C1
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Samambaia
+  🏘️ Bairro oficial (CEP): Bosque da Saúde
+--------------------------------------------------
+Pedido 7068801925310:
+  📥 address1 (usuário): Rua Almansa 225
+  📥 address2 (usuário): 31
+  ✅ Endereço base: Rua Almansa
+  🏷️ Número: 225
+  🧩 Complemento: 31
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Almansa
+  🏘️ Bairro oficial (CEP): Vila Andrade
+--------------------------------------------------
+Pedido 7080150925502:
+  📥 address1 (usuário): Rua Geraldo Raimundo da Silva, 81
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Geraldo Raimundo da Silva
+  🏷️ Número: 81
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7080272199870:
+  📥 address1 (usuário): Rua Max Zagel, 378, Camboinha 3
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Max Zagel
+  🏷️ Número: 378, Camboinha 3
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Max Zagel
+  🏘️ Bairro oficial (CEP): Camboinha
+--------------------------------------------------
+Pedido 7080279834814:
+  📥 address1 (usuário): Rua 296, número 190
+  📥 address2 (usuário): Apto 501 - Ed. Dimare
+  ✅ Endereço base: Rua 296
+  🏷️ Número: número 190
+  🧩 Complemento: Apto 501 - Ed. Dimare
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7073296416958:
+  📥 address1 (usuário): Rua Raimundo Alves da Silva n 74
+  📥 address2 (usuário): Apto 1403
+  ✅ Endereço base: Rua Raimundo Alves da Silva
+  🏷️ Número: 74
+  🧩 Complemento: Apto 1403
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Raimundo Alves da Silva
+  🏘️ Bairro oficial (CEP): Centro
+--------------------------------------------------
+Pedido 7080764211390:
+  📥 address1 (usuário): Rua Aurora Marques, 34
+  📥 address2 (usuário): q B lote 26
+  ✅ Endereço base: Rua Aurora Marques
+  🏷️ Número: 34
+  🧩 Complemento: q B lote 26
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Aurora Marques
+  🏘️ Bairro oficial (CEP): Jardim Residencial Renascence
+--------------------------------------------------
+Pedido 7065904218302:
+  📥 address1 (usuário): Casa
+  📥 address2 (usuário): 17
+  ✅ Endereço base: Rua Dom Luís de Vila Flor
+  🏷️ Número: s/n
+  🧩 Complemento: Casa 17
+  📍 Precisa contato: SIM
+  🧾 Logradouro oficial (CEP): Rua Dom Luís de Vila Flor
+  🏘️ Bairro oficial (CEP): Conjunto Habitacional Sitio Conceição
+--------------------------------------------------
+Pedido 7069434839230:
+  📥 address1 (usuário): Rua 28 n. 1868
+  📥 address2 (usuário): ...
+  ✅ Endereço base: Rua 28
+  🏷️ Número: 1868
+  🧩 Complemento: ...
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): 
+  🏘️ Bairro oficial (CEP): 
+--------------------------------------------------
+Pedido 7081772810430:
+  📥 address1 (usuário): Rua Teixeira de Freitas, 225
+  📥 address2 (usuário): 901
+  ✅ Endereço base: Rua Teixeira de Freitas
+  🏷️ Número: 225
+  🧩 Complemento: 901
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Teixeira de Freitas
+  🏘️ Bairro oficial (CEP): Santo Antônio
+--------------------------------------------------
+Pedido 7081833791678:
+  📥 address1 (usuário): Av. Dr. Chucri Zaidan, 1550
+  📥 address2 (usuário): cj. 1813 - Edifício Capital Corporate Office
+  ✅ Endereço base: Av. Dr. Chucri Zaidan
+  🏷️ Número: 1550
+  🧩 Complemento: cj. 1813 - Edifício Capital Corporate Office
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Doutor Chucri Zaidan
+  🏘️ Bairro oficial (CEP): Vila São Francisco (Zona Sul)
+--------------------------------------------------
+Pedido 7072116605118:
+  📥 address1 (usuário): Rua Japurá
+  📥 address2 (usuário): 3601, ap. 52 - Aston Park
+  ✅ Endereço base: Rua Japurá
+  🏷️ Número: 3601
+  🧩 Complemento: ap. 52 - Aston Park
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Japurá
+  🏘️ Bairro oficial (CEP): Zona I
+--------------------------------------------------
+Pedido 7069590782142:
+  📥 address1 (usuário): Rua Beija-Flor 389
+  📥 address2 (usuário): casa
+  ✅ Endereço base: Rua Beija-Flor
+  🏷️ Número: 389
+  🧩 Complemento: casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Beija-Flor
+  🏘️ Bairro oficial (CEP): Jardim Santa Maria
+--------------------------------------------------
+Pedido 7073250181310:
+  📥 address1 (usuário): Avenida Mato Grosso 300
+  📥 address2 (usuário): Residencial Nabor Assis
+  ✅ Endereço base: Avenida Mato Grosso
+  🏷️ Número: 300
+  🧩 Complemento: Residencial Nabor Assis
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Mato Grosso
+  🏘️ Bairro oficial (CEP): Estados
+--------------------------------------------------
+Pedido 7071770312894:
+  📥 address1 (usuário): 325
+  📥 address2 (usuário): Apto 1101
+  ✅ Endereço base: Rua Cônego Rocha Franco
+  🏷️ Número: 325
+  🧩 Complemento: Apto 1101
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Cônego Rocha Franco
+  🏘️ Bairro oficial (CEP): Gutierrez
+--------------------------------------------------
+Pedido 7082790092990:
+  📥 address1 (usuário): Rua Hélio Magalhães, 276
+  📥 address2 (usuário): Casa
+  ✅ Endereço base: Rua Hélio Magalhães
+  🏷️ Número: 276
+  🧩 Complemento: Casa
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Hélio Magalhães
+  🏘️ Bairro oficial (CEP): Aeroporto
+--------------------------------------------------
+Pedido 7070684938430:
+  📥 address1 (usuário): SHIN QL 04 Conjunto 7 casa 12
+  📥 address2 (usuário): casa 12
+  ✅ Endereço base: Quadra SHIN QL 4 Conjunto 7
+  🏷️ Número: 12
+  🧩 Complemento: casa 12
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Quadra SHIN QL 4 Conjunto 7
+  🏘️ Bairro oficial (CEP): Setor de Habitações Individuais Norte
+--------------------------------------------------
+Pedido 7083030413502:
+  📥 address1 (usuário): Rua Dona Antônia de Queirós, 88
+  📥 address2 (usuário): Apt. 601-A
+  ✅ Endereço base: Rua Dona Antônia de Queirós
+  🏷️ Número: 88
+  🧩 Complemento: Apt. 601-A
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Dona Antônia de Queirós
+  🏘️ Bairro oficial (CEP): Consolação
+--------------------------------------------------
+Pedido 7073329086654:
+  📥 address1 (usuário): Rua Sete de Setembro
+  📥 address2 (usuário): 558
+  ✅ Endereço base: Rua Sete de Setembro
+  🏷️ Número: 558
+  🧩 Complemento: 
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Rua Sete de Setembro
+  🏘️ Bairro oficial (CEP): Vila Birigui
+--------------------------------------------------
+Pedido 7074091335870:
+  📥 address1 (usuário): Avenida Almirante Barroso 2010
+  📥 address2 (usuário): Bloco C, apto 1102
+  ✅ Endereço base: Avenida Almirante Barroso
+  🏷️ Número: 2010
+  🧩 Complemento: Bloco C, apto 1102
+  📍 Precisa contato: NÃO
+  🧾 Logradouro oficial (CEP): Avenida Almirante Barroso
+  🏘️ Bairro oficial (CEP): Marco
+--------------------------------------------------

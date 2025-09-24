@@ -1,4 +1,4 @@
-# Imports da biblioteca padrão
+# ===================== IMPORTS - BIBLIOTECA PADRÃO =====================
 import argparse
 import calendar
 import json
@@ -21,6 +21,7 @@ from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, suppress
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dtime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import JSONDecodeError
@@ -31,6 +32,7 @@ from typing import Any, Literal, Optional, Protocol, TypedDict, cast, overload
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+# ===================== IMPORTS - TERCEIROS (BACKEND) =====================
 import certifi
 import openai
 import pandas as pd
@@ -41,6 +43,8 @@ from colorama import init
 from dateutil.parser import parse as parse_date
 from fpdf import FPDF
 from openai import RateLimitError
+
+# ===================== IMPORTS - TERCEIROS (UI / FRONTEND) =====================
 from PyQt5.QtCore import (
     QCoreApplication,
     QDate,
@@ -93,6 +97,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from unidecode import unidecode
 
+# ===================== IMPORTS - MÓDULOS INTERNOS =====================
 from common.cli_safe import safe_cli
 from common.errors import ExternalError, UserError
 from common.http_client import http_get, http_post
@@ -100,8 +105,8 @@ from common.logging_setup import get_correlation_id, set_correlation_id, setup_l
 from common.settings import settings
 from common.validation import ensure_paths, validate_config
 
+# ===================== SETUP AMBIENTE =====================
 init(autoreset=True)
-
 os.environ["SSL_CERT_FILE"] = certifi.where()
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -111,7 +116,9 @@ HEADERS_GURU = {
     "Content-Type": "application/json",
 }
 
-# ===================== CONFIGURAÇÕES =====================
+# =====================================================================
+# ===================== UI / FRONTEND (apenas PyQt) ====================
+# =====================================================================
 
 
 class Comunicador(QObject):
@@ -122,12 +129,95 @@ class Comunicador(QObject):
 comunicador_global = Comunicador()
 
 
+@pyqtSlot(str, str, str)
+def slot_mostrar_mensagem(
+    tipo: Literal["erro", "info", "warn", "warning"],
+    titulo: str,
+    texto: str,
+) -> None:
+    """Mostra mensagem ao usuário (UI)."""
+    msg = QMessageBox()
+    if tipo in ("erro",):
+        msg.setIcon(QMessageBox.Critical)
+    elif tipo in ("info",):
+        msg.setIcon(QMessageBox.Information)
+    else:  # "warn"/"warning" → Warning
+        msg.setIcon(QMessageBox.Warning)
+    msg.setWindowTitle(titulo)
+    msg.setText(texto)
+    msg.exec_()  # PyQt6: use msg.exec()
+
+
+# Conexão de sinal → slot (UI)
+comunicador_global.mostrar_mensagem.connect(slot_mostrar_mensagem)
+
+
 def run_gui() -> int:
-    # ativa JSON no console e também loga no arquivo existente
-    setup_logging(level=logging.INFO, json_console=True, file_path=os.path.join(caminho_base(), "sistema.log"))
-    set_correlation_id()  # gera um id para essa execução
-    abrir_interface(estado, skus_info)
+    """Bootstrap de UI (orquestração; sem regra de negócio)."""
+    # logging visual/arquivo para execução com interface
+    setup_logging(
+        level=logging.INFO,
+        json_console=True,
+        file_path=os.path.join(caminho_base(), "sistema.log"),
+    )
+    set_correlation_id()  # id de correlação para a sessão
+    abrir_interface(estado, skus_info)  # UI principal (definida mais adiante no arquivo)
     return 0
+
+
+# ------ Estados de UI (widgets exibidos em progresso etc.) ------
+janela_progresso = None  # UI
+texto_label = None  # UI
+barra_progresso = None  # UI
+
+# =====================================================================
+# ===================== BACKEND / REGRAS (sem PyQt) ====================
+# =====================================================================
+
+
+def caminho_base() -> str:
+    """Diretório onde está o main.py (independe do cwd)."""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+limite_gpt = threading.Semaphore(4)
+controle_rate_limit = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
+
+log_path = os.path.join(caminho_base(), "sistema.log")
+
+# 🔄 Formato comum (logger backend)
+formatter = logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S")
+logger = logging.getLogger("logistica")
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    # 📁 Log em arquivo
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # 🖥️ Log no console
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+dados: dict[str, Any] = {}
+estado = {
+    "transacoes_obtidas": False,
+    "linhas_planilha": [],
+    "numero_pedido_bling": None,
+    "skus_info": {},
+    "cancelador_global": threading.Event(),
+}
+linhas_planilha: list[dict[str, Any]] = []
+total_etapas = 0
+progresso_total = 0
+transacoes_obtidas = False
+transportadoras_var: dict[str, Any] = {}
+transportadoras_lista = ["CORREIOS", "GFL", "GOL", "JET", "LOG"]
+skus_path = os.path.join(caminho_base(), "skus.json")
+transacoes: list[dict[str, Any]] = []
+enderecos_para_revisar: list[dict[str, Any]] = []
 
 
 def _load_payload_from_arg(value: str) -> dict[Any, Any]:
@@ -135,7 +225,6 @@ def _load_payload_from_arg(value: str) -> dict[Any, Any]:
 
     Se for caminho, tentamos carregar; caso contrário, tratamos como JSON string.
     """
-
     try:
         is_path = os.path.exists(value)
 
@@ -175,83 +264,7 @@ def _load_payload_from_arg(value: str) -> dict[Any, Any]:
         raise UserError("JSON inválido em --config", code="BAD_JSON", data={"value": value}) from e
 
 
-@pyqtSlot(str, str, str)
-def slot_mostrar_mensagem(
-    tipo: Literal["erro", "info", "warn", "warning"],
-    titulo: str,
-    texto: str,
-) -> None:
-    msg = QMessageBox()
-    if tipo in ("erro",):
-        msg.setIcon(QMessageBox.Critical)
-    elif tipo in ("info",):
-        msg.setIcon(QMessageBox.Information)
-    else:  # "warn" / "warning" (ou qualquer outro → Warning)
-        msg.setIcon(QMessageBox.Warning)
-    msg.setWindowTitle(titulo)
-    msg.setText(texto)
-    msg.exec_()  # se migrar para PyQt6: use msg.exec()
-
-
-comunicador_global.mostrar_mensagem.connect(slot_mostrar_mensagem)
-
-
-class _CliCfg(Protocol):
-    input_path: str
-    output_dir: str
-    dry_run: bool
-
-
-def caminho_base() -> str:
-    """Diretório onde está o main.py (independe do cwd)."""
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-limite_gpt = threading.Semaphore(4)
-
-controle_rate_limit = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
-
-log_path = os.path.join(caminho_base(), "sistema.log")
-
-# 🔄 Formato comum
-formatter = logging.Formatter("[%(asctime)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S")
-logger = logging.getLogger("logistica")
-logger.setLevel(logging.INFO)
-
-if not logger.handlers:
-    # 📁 Log em arquivo
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    # 🖥️ Log no console
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-dados: dict[str, Any] = {}
-estado = {
-    "transacoes_obtidas": False,
-    "linhas_planilha": [],
-    "numero_pedido_bling": None,
-    "skus_info": {},
-    "cancelador_global": threading.Event(),
-}
-linhas_planilha: list[dict[str, Any]] = []
-total_etapas = 0
-progresso_total = 0
-transacoes_obtidas = False
-transportadoras_var: dict[str, Any] = {}
-transportadoras_lista = ["CORREIOS", "GFL", "GOL", "JET", "LOG"]
-skus_path = os.path.join(caminho_base(), "skus.json")
-janela_progresso = None
-texto_label = None
-barra_progresso = None
-transacoes: list[dict[str, Any]] = []
-enderecos_para_revisar: list[dict[str, Any]] = []
-
-# Inicializa o dicionário de SKUs a partir de arquivo JSON.
-
+# -------------------- Inicialização de SKUs (backend) --------------------
 if os.path.exists(skus_path):
     with open(skus_path, encoding="utf-8") as f:
         skus_info = json.load(f)
@@ -265,6 +278,10 @@ else:
     }
     with open(skus_path, "w", encoding="utf-8") as f:
         json.dump(skus_info, f, indent=4, ensure_ascii=False)
+
+# =====================================================================
+# ===================== BACKEND / REGRAS (sem PyQt) ====================
+# =====================================================================
 
 # Helpers datetime
 TZ_APP = ZoneInfo("America/Sao_Paulo")
@@ -397,1081 +414,6 @@ def _fim_bimestre_por_data(dt: datetime) -> datetime:
 
 
 LIMITE_INFERIOR = datetime(2024, 10, 1, tzinfo=UTC)
-
-# Mapear produtos do Guru
-
-
-def buscar_todos_produtos_guru() -> list[dict[str, Any]]:
-    url = f"{BASE_URL_GURU}/products"
-    headers = HEADERS_GURU
-    produtos: list[dict[str, Any]] = []
-    cursor: str | None = None
-    pagina = 1
-
-    while True:
-        try:
-            params: dict[str, Any] = {"limit": 100}
-            if cursor:
-                params["cursor"] = cursor
-
-            r = http_get(url, headers=headers, params=params, timeout=10)
-            if r.status_code != 200:
-                print(f"[❌ Guru] Erro {r.status_code} ao buscar produtos: {r.text}")
-                break
-
-            data: dict[str, Any] = r.json()
-            pagina_dados = data.get("data", [])
-            print(f"[📄 Página {pagina}] {len(pagina_dados)} produtos encontrados")
-
-            produtos += pagina_dados  # esperado: list[dict[str, Any]]
-            cursor = data.get("next_cursor")
-
-            if not cursor:
-                break
-
-            pagina += 1
-
-        except Exception as e:
-            print(f"[❌ Guru] Exceção ao buscar produtos: {e}")
-            break
-
-    print(f"[✅ Guru] Total de produtos carregados: {len(produtos)}")
-    return produtos
-
-
-def mapear_skus_com_produtos_guru(skus_info: MutableMapping[str, Any]) -> None:
-    produtos_guru = buscar_todos_produtos_guru()
-    if not produtos_guru:
-        QMessageBox.warning(None, "Erro", "Nenhum produto retornado do Guru.")
-        return
-    abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path)
-
-
-def abrir_dialogo_mapeamento_guru(
-    skus_info: Mapping[str, MutableMapping[str, Any]],  # ← antes era MutableMapping[…]
-    produtos_guru: Sequence[Mapping[str, Any]] | None,
-    skus_path: str,
-) -> None:
-    class DialogoMapeamento(QDialog):
-        def __init__(self) -> None:
-            super().__init__()
-            super().__init__()
-            self.setWindowTitle("Mapear Produtos do Guru para Produtos Internos")
-            self.setMinimumSize(800, 500)
-            self.main_layout = QVBoxLayout(self)
-
-            # mantém referências
-            self.skus_info: MutableMapping[str, Any] = cast(MutableMapping[str, Any], skus_info)
-            self.produtos: list[dict[str, Any]] = [dict(p) for p in (produtos_guru or [])]
-            self.produtos_restantes: list[dict[str, Any]] = list(self.produtos)
-
-            # Seletor de produto interno (não permite digitar)
-            linha_nome: QHBoxLayout = QHBoxLayout()
-            linha_nome.addWidget(QLabel("Selecionar produto interno:"))
-            self.combo_nome_interno = QComboBox()
-            self.combo_nome_interno.setEditable(False)
-            linha_nome.addWidget(self.combo_nome_interno)
-            self.main_layout.addLayout(linha_nome)
-
-            # Lista de produtos do Guru
-            self.lista = QListWidget()
-            self.lista.setSelectionMode(QListWidget.MultiSelection)
-            self.main_layout.addWidget(QLabel("Selecione os produtos do Guru a associar:"))
-            self.main_layout.addWidget(self.lista)
-
-            # Tipo: assinatura ou produto
-            linha_tipo: QHBoxLayout = QHBoxLayout()
-            self.radio_produto = QRadioButton("Produto")
-            self.radio_assinatura = QRadioButton("Assinatura")
-            self.radio_produto.setChecked(True)
-            self.grupo_tipo = QButtonGroup()
-            self.grupo_tipo.addButton(self.radio_produto)
-            self.grupo_tipo.addButton(self.radio_assinatura)
-            linha_tipo.addWidget(QLabel("Tipo:"))
-            linha_tipo.addWidget(self.radio_produto)
-            linha_tipo.addWidget(self.radio_assinatura)
-            self.main_layout.addLayout(linha_tipo)
-
-            # Assinatura: duração + periodicidade
-            self.widget_assinatura = QWidget()
-            linha_assin: QHBoxLayout = QHBoxLayout(self.widget_assinatura)
-            self.combo_duracao = QComboBox()
-            self.combo_duracao.addItems(["mensal", "bimestral", "anual", "bianual", "trianual"])
-            linha_assin.addWidget(QLabel("Duração do plano:"))
-            linha_assin.addWidget(self.combo_duracao)
-
-            self.combo_periodicidade = QComboBox()
-            self.combo_periodicidade.addItems(["mensal", "bimestral"])
-            linha_assin.addWidget(QLabel("Periodicidade (envio):"))
-            linha_assin.addWidget(self.combo_periodicidade)
-            self.main_layout.addWidget(self.widget_assinatura)
-
-            self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
-
-            # Recarrega nomes internos quando muda o tipo
-            self.radio_assinatura.toggled.connect(lambda _checked: self._on_tipo_changed())
-            self.radio_produto.toggled.connect(lambda _checked: self._on_tipo_changed())
-
-            # Botões
-            botoes: QHBoxLayout = QHBoxLayout()
-            self.btn_salvar = QPushButton("Salvar e Próximo")
-            self.btn_cancelar = QPushButton("Cancelar")
-            botoes.addWidget(self.btn_salvar)
-            botoes.addWidget(self.btn_cancelar)
-            self.main_layout.addLayout(botoes)
-
-            self.btn_salvar.clicked.connect(self.salvar_selecao)
-            self.btn_cancelar.clicked.connect(self.reject)
-
-            # Inicializa listas e combo
-            self._recarregar_combo_interno()
-            self.iniciar()
-
-        # ----- helpers -----
-        def _on_tipo_changed(self) -> None:
-            self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
-            self._recarregar_combo_interno()
-
-        def _nomes_internos_para_tipo(self) -> list[str]:
-            if self.radio_assinatura.isChecked():
-                return sorted(
-                    [
-                        n
-                        for n, info in self.skus_info.items()
-                        if cast(Mapping[str, Any], info).get("tipo") == "assinatura"
-                    ]
-                )
-            return sorted(
-                [n for n, info in self.skus_info.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura"]
-            )
-
-        def _recarregar_combo_interno(self) -> None:
-            self.combo_nome_interno.blockSignals(True)
-            self.combo_nome_interno.clear()
-            self.combo_nome_interno.addItems(self._nomes_internos_para_tipo())
-            self.combo_nome_interno.blockSignals(False)
-
-        # ----- UI data -----
-        def iniciar(self) -> None:
-            self.lista.clear()
-            termo = ""  # sem filtro por enquanto
-            for p in self.produtos:
-                titulo = (p.get("name") or "").strip()
-                product_id = str(p.get("id") or "").strip()
-                market_id = str(p.get("marketplace_id") or "").strip()
-                if not titulo and not market_id and not product_id:
-                    continue
-
-                alvo = unidecode(f"{titulo} {market_id}".lower())
-                if termo and termo not in alvo:
-                    continue
-
-                label = f"{titulo} (id:{market_id})" if market_id else f"{titulo} (id:{product_id})"
-                item = QListWidgetItem(label)
-                item.setData(Qt.UserRole, product_id)  # ID técnico salvo
-                item.setData(Qt.UserRole + 1, market_id)  # informativo
-                item.setToolTip(f"marketplace_id: {market_id or '-'}\nproduct_id: {product_id or '-'}")
-                self.lista.addItem(item)
-
-        # ----- salvar -----
-        def salvar_selecao(self) -> None:
-            nome_base_raw = self.combo_nome_interno.currentText().strip()
-            if not nome_base_raw:
-                QMessageBox.warning(self, "Aviso", "Você precisa selecionar um produto interno.")
-                return
-
-            itens = self.lista.selectedItems()
-            if not itens:
-                QMessageBox.warning(self, "Aviso", "Você precisa selecionar ao menos um produto do Guru.")
-                return
-
-            novos_ids: list[str] = [str(it.data(Qt.UserRole) or "").strip() for it in itens]
-            novos_ids = [gid for gid in novos_ids if gid]
-
-            is_assinatura = self.radio_assinatura.isChecked()
-            if is_assinatura:
-                duracao = self.combo_duracao.currentText().strip().lower()
-                periodicidade = self.combo_periodicidade.currentText().strip().lower()
-                if not periodicidade:
-                    QMessageBox.warning(self, "Aviso", "Selecione a periodicidade da assinatura.")
-                    return
-                nome_base = re.sub(r"\s*\((mensal|bimestral)\)\s*$", "", nome_base_raw, flags=re.IGNORECASE).strip()
-                dest_key = f"{nome_base} ({periodicidade})"
-            else:
-                duracao = None
-                periodicidade = None
-                dest_key = nome_base_raw
-
-            # migração legado (sem sufixo -> com sufixo) somente se assinatura
-            if is_assinatura and dest_key != nome_base_raw and nome_base_raw in self.skus_info:
-                legado = cast(Mapping[str, Any], self.skus_info.pop(nome_base_raw) or {})
-                alvo = cast(MutableMapping[str, Any], self.skus_info.setdefault(dest_key, {}))
-                for k_list in ("guru_ids", "shopify_ids", "composto_de"):
-                    v = cast(Sequence[Any] | None, legado.get(k_list))
-                    if v:
-                        alvo.setdefault(k_list, [])
-                        for x in v:
-                            if x not in alvo[k_list]:
-                                alvo[k_list].append(x)
-                for k, v in legado.items():
-                    if k not in ("guru_ids", "shopify_ids", "composto_de"):
-                        alvo.setdefault(k, v)
-
-            entrada = cast(MutableMapping[str, Any], self.skus_info.setdefault(dest_key, {}))
-            if is_assinatura:
-                entrada["tipo"] = "assinatura"
-                entrada["recorrencia"] = duracao
-                entrada["periodicidade"] = periodicidade
-                entrada.setdefault("sku", "")
-                entrada.setdefault("peso", 0.0)
-                entrada.setdefault("composto_de", [])
-            else:
-                entrada["tipo"] = "produto"
-                entrada.pop("recorrencia", None)
-                entrada.pop("periodicidade", None)
-
-            entrada.setdefault("guru_ids", [])
-            ja = set(map(str, cast(Sequence[Any], entrada["guru_ids"])))
-            for gid in novos_ids:
-                if gid and gid not in ja:
-                    entrada["guru_ids"].append(gid)
-                    ja.add(gid)
-
-            with open(skus_path, "w", encoding="utf-8") as f:
-                json.dump(self.skus_info, f, indent=4, ensure_ascii=False)
-
-            QMessageBox.information(self, "Sucesso", f"'{dest_key}' mapeado com sucesso!")
-            self.lista.clearSelection()
-            self.iniciar()
-
-    dlg = DialogoMapeamento()
-    dlg.exec_()
-
-
-def obter_ids_assinaturas_por_duracao(
-    skus_info: Mapping[str, Mapping[str, Any]],
-) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
-    assinaturas: dict[str, list[str]] = {
-        "mensal": [],
-        "bimestral": [],
-        "anual": [],
-        "bianual": [],
-        "trianual": [],
-    }
-    # mapa auxiliar: guru_id -> {"recorrencia":..., "periodicidade":...}
-    guru_meta: dict[str, dict[str, str]] = {}
-
-    for _nome, info in skus_info.items():
-        if (info.get("tipo") or "").lower() == "assinatura":
-            ids = info.get("guru_ids", [])
-            dur = (info.get("recorrencia") or "").lower()
-            per = (info.get("periodicidade") or "").lower()
-            for gid in ids:
-                if dur in assinaturas:
-                    assinaturas[dur].append(str(gid))
-                guru_meta[str(gid)] = {"recorrencia": dur, "periodicidade": per}
-
-    return assinaturas, guru_meta
-
-
-def gerar_uuid() -> str:
-    return str(uuid.uuid4())
-
-
-############################################
-# Diálogo de Edição de Regra
-############################################
-
-
-class RuleEditorDialog(QDialog):
-    """Editor de uma regra individual.
-
-    Cria/edita um dict no formato:
-      { "id": "...", "applies_to": "oferta"|"cupom", ... }
-    """
-
-    def __init__(
-        self,
-        parent: QWidget | None,
-        skus_info: Mapping[str, Any],
-        regra: dict[str, Any] | None = None,
-        produtos_guru: list[dict[str, Any]] | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Regra (Oferta/Cupom)")
-        self.setMinimumWidth(600)
-
-        self.skus_info: Mapping[str, Any] = skus_info
-        self.regra: dict[str, Any] = regra or {}
-        self.produtos_guru: list[dict[str, Any]] = produtos_guru or []
-
-        layout: QVBoxLayout = QVBoxLayout(self)
-
-        # ====== Aplica a: oferta | cupom ======
-        linha_aplica: QHBoxLayout = QHBoxLayout()
-        lbl_aplica = QLabel("Aplica a:")
-        self.combo_aplica = QComboBox()
-        self.combo_aplica.addItems(["oferta", "cupom"])
-        linha_aplica.addWidget(lbl_aplica)
-        linha_aplica.addWidget(self.combo_aplica)
-        layout.addLayout(linha_aplica)
-
-        # ====== CUPOM ======
-        self.widget_cupom = QWidget()
-        layout_cupom: QHBoxLayout = QHBoxLayout(self.widget_cupom)
-        layout_cupom.setContentsMargins(0, 0, 0, 0)
-        layout_cupom.addWidget(QLabel("Cupom:"))
-        self.input_cupom = QLineEdit()
-        layout_cupom.addWidget(self.input_cupom)
-
-        # ====== OFERTA ======
-        self.widget_oferta = QWidget()
-        layout_oferta: QVBoxLayout = QVBoxLayout(self.widget_oferta)
-        layout_oferta.setContentsMargins(0, 0, 0, 0)
-
-        linha_prod: QHBoxLayout = QHBoxLayout()
-        linha_prod.addWidget(QLabel("Produto (Guru):"))
-        self.combo_produto_guru = QComboBox()
-        self.combo_produto_guru.setEditable(True)
-
-        # Preencher produtos do Guru se fornecidos (opcional)
-        for p in self.produtos_guru:
-            texto = f'{p.get("name","") or p.get("id","")}  [{p.get("id","")}]'
-            self.combo_produto_guru.addItem(texto, p.get("id"))
-
-        linha_prod.addWidget(self.combo_produto_guru)
-
-        btn_carregar_ofertas = QPushButton("Carregar ofertas")
-        btn_carregar_ofertas.clicked.connect(self._carregar_ofertas)
-        linha_prod.addWidget(btn_carregar_ofertas)
-
-        layout_oferta.addLayout(linha_prod)
-
-        linha_oferta: QHBoxLayout = QHBoxLayout()
-        linha_oferta.addWidget(QLabel("Oferta:"))
-        self.combo_oferta = QComboBox()
-        linha_oferta.addWidget(self.combo_oferta)
-        layout_oferta.addLayout(linha_oferta)
-
-        # ====== Assinaturas (só para CUPOM) ======
-        self.widget_assinaturas = QGroupBox("Assinaturas (apenas para CUPOM)")
-        layout_ass: QVBoxLayout = QVBoxLayout(self.widget_assinaturas)
-        self.lista_assinaturas = QListWidget()
-        self.lista_assinaturas.setSelectionMode(QAbstractItemView.MultiSelection)
-
-        assinaturas = [
-            n for n, info in self.skus_info.items() if cast(Mapping[str, Any], info).get("tipo") == "assinatura"
-        ]
-        for nome in sorted(assinaturas):
-            self.lista_assinaturas.addItem(QListWidgetItem(nome))
-        layout_ass.addWidget(self.lista_assinaturas)
-
-        # ====== Ação ======
-        caixa_acao = QGroupBox("Ação")
-        layout_acao: QVBoxLayout = QVBoxLayout(caixa_acao)
-
-        linha_tipo: QHBoxLayout = QHBoxLayout()
-        linha_tipo.addWidget(QLabel("Tipo de ação:"))
-        self.combo_acao = QComboBox()
-        self.combo_acao.addItems(["alterar_box", "adicionar_brindes"])
-        linha_tipo.addWidget(self.combo_acao)
-        layout_acao.addLayout(linha_tipo)
-
-        # alterar_box → escolher box (produtos simples)
-        self.widget_alterar = QWidget()
-        layout_alt: QHBoxLayout = QHBoxLayout(self.widget_alterar)
-        layout_alt.setContentsMargins(0, 0, 0, 0)
-        layout_alt.addWidget(QLabel("Box substituto:"))
-        self.combo_box = QComboBox()
-        produtos_simples = [
-            n
-            for n, info in self.skus_info.items()
-            if cast(Mapping[str, Any], info).get("tipo") != "assinatura"
-            and not cast(Mapping[str, Any], info).get("composto_de")
-        ]
-        self.combo_box.addItems(sorted(produtos_simples))
-        layout_alt.addWidget(self.combo_box)
-
-        # adicionar_brindes → múltiplos brindes (qualquer item não-assinatura)
-        self.widget_brindes = QWidget()
-        layout_br: QVBoxLayout = QVBoxLayout(self.widget_brindes)
-        layout_br.setContentsMargins(0, 0, 0, 0)
-        self.lista_brindes = QListWidget()
-        self.lista_brindes.setSelectionMode(QAbstractItemView.MultiSelection)
-        brindes = [n for n, info in self.skus_info.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura"]
-        for nome in sorted(brindes):
-            self.lista_brindes.addItem(QListWidgetItem(nome))
-        layout_br.addWidget(QLabel("Brindes a adicionar:"))
-        layout_br.addWidget(self.lista_brindes)
-
-        layout_acao.addWidget(self.widget_alterar)
-        layout_acao.addWidget(self.widget_brindes)
-
-        # ====== Montagem/ordem no diálogo ======
-        layout.addWidget(self.widget_cupom)
-        layout.addWidget(self.widget_oferta)
-        layout.addWidget(self.widget_assinaturas)
-        layout.addWidget(caixa_acao)
-
-        # Botões OK/Cancelar
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-        # sinais
-        self.combo_aplica.currentTextChanged.connect(self._toggle_aplica)
-        self.combo_acao.currentTextChanged.connect(self._toggle_acao)
-
-        # preencher se edição
-        self._hydrate(self.regra)
-        self._toggle_aplica(self.combo_aplica.currentText())
-        self._toggle_acao(self.combo_acao.currentText())
-
-    def _hydrate(self, regra: Mapping[str, Any]) -> None:
-        applies_to = cast(str, regra.get("applies_to", "oferta"))
-        self.combo_aplica.setCurrentText(applies_to)
-
-        if applies_to == "cupom":
-            self.input_cupom.setText(str((regra.get("cupom") or {}).get("nome", "")))
-
-        if applies_to == "oferta":
-            prod_id = str((regra.get("oferta") or {}).get("produto_id", "") or "")
-            oferta_id = str((regra.get("oferta") or {}).get("oferta_id", "") or "")
-            idx_prod = max(0, self.combo_produto_guru.findData(prod_id))
-            self.combo_produto_guru.setCurrentIndex(idx_prod)
-
-            if prod_id:
-                self._carregar_ofertas()
-                oferta_id = str((regra.get("oferta") or {}).get("oferta_id", "") or "")
-                idx_of = self.combo_oferta.findData(oferta_id)
-
-                if idx_of == -1 and oferta_id:
-                    nome_existente = str((regra.get("oferta") or {}).get("nome", "") or "")
-                    display = f"{(nome_existente or oferta_id)} [{oferta_id}]"
-                    self.combo_oferta.addItem(display, oferta_id)
-                    idx_of = self.combo_oferta.count() - 1
-                    self.combo_oferta.setItemData(idx_of, nome_existente or "", Qt.UserRole + 1)
-
-                self.combo_oferta.setCurrentIndex(max(0, idx_of))
-
-        # assinaturas
-        assinaturas = cast(list[str], regra.get("assinaturas", []) or [])
-        if assinaturas:
-            selecionadas = set(assinaturas)
-            for i in range(self.lista_assinaturas.count()):
-                item = self.lista_assinaturas.item(i)
-                if item is None:
-                    continue
-                if item.text() in selecionadas:
-                    item.setSelected(True)
-
-        # ação
-        action = cast(Mapping[str, Any], regra.get("action", {}) or {})
-        self.combo_acao.setCurrentText(str(action.get("type", "alterar_box")))
-
-        if action.get("type") == "alterar_box":
-            box = str(action.get("box", "") or "")
-            idx = max(0, self.combo_box.findText(box))
-            self.combo_box.setCurrentIndex(idx)
-
-        if action.get("type") == "adicionar_brindes":
-            brindes = cast(list[str], action.get("brindes", []) or [])
-            selecionadas = set(brindes)
-            for i in range(self.lista_brindes.count()):
-                it = self.lista_brindes.item(i)
-                if it is None:
-                    continue
-                if it.text() in selecionadas:
-                    it.setSelected(True)
-
-    def _toggle_aplica(self, applies_to: str) -> None:
-        is_cupom = applies_to == "cupom"
-        self.widget_cupom.setVisible(is_cupom)
-        self.widget_assinaturas.setVisible(is_cupom)
-
-        is_oferta = applies_to == "oferta"
-        self.widget_oferta.setVisible(is_oferta)
-
-    def _toggle_acao(self, tipo: str) -> None:
-        self.widget_alterar.setVisible(tipo == "alterar_box")
-        self.widget_brindes.setVisible(tipo == "adicionar_brindes")
-
-    def _carregar_ofertas(self) -> None:
-        prod_data = self.combo_produto_guru.currentData()
-        prod_id = str(prod_data) if prod_data is not None else ""
-        if not prod_id:
-            txt = self.combo_produto_guru.currentText()
-            if "[" in txt and "]" in txt:
-                prod_id = txt.split("[")[-1].split("]")[0].strip()
-
-        self.combo_oferta.clear()
-        if not prod_id:
-            return
-
-        ofertas = buscar_ofertas_do_produto(prod_id) or []
-        for o in ofertas:
-            oid = str(o.get("id", "") or "")
-            nome = str(o.get("name") or oid or "Oferta")
-            self.combo_oferta.addItem(f"{nome} [{oid}]", oid)
-            idx = self.combo_oferta.count() - 1
-            self.combo_oferta.setItemData(idx, nome, Qt.UserRole + 1)
-
-    def _accept(self) -> None:
-        applies_to = self.combo_aplica.currentText()
-
-        # ===== Validação =====
-        if applies_to == "cupom":
-            cupom = self.input_cupom.text().strip()
-            if not cupom:
-                QMessageBox.warning(self, "Validação", "Informe o nome do cupom.")
-                return
-        elif applies_to == "oferta":
-            prod_data = self.combo_produto_guru.currentData()
-            prod_id = str(prod_data) if prod_data is not None else ""
-            if not prod_id:
-                txt_prod = self.combo_produto_guru.currentText()
-                if "[" in txt_prod and "]" in txt_prod:
-                    prod_id = txt_prod.split("[")[-1].split("]")[0].strip()
-            of_data = self.combo_oferta.currentData()
-            of_id = str(of_data) if of_data is not None else ""
-            if not (prod_id and of_id):
-                QMessageBox.warning(self, "Validação", "Selecione produto e oferta do Guru.")
-                return
-
-        action_type = self.combo_acao.currentText()
-        if action_type == "alterar_box":
-            if not self.combo_box.currentText().strip():
-                QMessageBox.warning(self, "Validação", "Selecione o box substituto.")
-                return
-        else:
-            brindes_sel = [it.text() for it in self.lista_brindes.selectedItems()]
-            if not brindes_sel:
-                QMessageBox.warning(self, "Validação", "Selecione ao menos um brinde.")
-                return
-
-        # ===== Construção do objeto da regra =====
-        rid = self.regra.get("id")
-        if not rid:
-            try:
-                rid = gerar_uuid()
-            except NameError:
-
-                rid = str(uuid.uuid4())
-
-        regra_nova: dict[str, Any] = {
-            "id": rid,
-            "applies_to": applies_to,
-            "action": {"type": action_type},
-        }
-
-        if applies_to == "cupom":
-            cupom_nome = self.input_cupom.text().strip().upper()
-            regra_nova["cupom"] = {"nome": cupom_nome}
-
-            assin_sel = [it.text() for it in self.lista_assinaturas.selectedItems()]
-            _seen: set[str] = set()
-            regra_nova["assinaturas"] = list(dict.fromkeys(assin_sel))
-
-        else:  # oferta
-            idx_of = self.combo_oferta.currentIndex()
-            of_nome = self.combo_oferta.itemData(idx_of, Qt.UserRole + 1)
-            if not of_nome:
-                of_text = (self.combo_oferta.currentText() or "").strip()
-                of_nome = of_text.split("[", 1)[0].strip() if "[" in of_text else of_text
-
-            # prod_id / of_id já validados acima
-            prod_id = str(self.combo_produto_guru.currentData() or "").strip() or prod_id
-            of_id = str(self.combo_oferta.currentData() or "").strip()
-
-            regra_nova["oferta"] = {
-                "produto_id": prod_id,
-                "oferta_id": of_id,
-                "nome": str(of_nome or ""),
-            }
-
-        if action_type == "alterar_box":
-            regra_nova["action"]["box"] = self.combo_box.currentText().strip()
-        else:
-            brs = [it.text() for it in self.lista_brindes.selectedItems()]
-            regra_nova["action"]["brindes"] = list(dict.fromkeys(brs))
-
-        self.regra = regra_nova
-        self.accept()
-
-    def get_regra(self) -> dict[str, Any]:
-        return self.regra
-
-
-############################################
-# Diálogo principal: gerenciador de regras
-############################################
-
-
-class RuleManagerDialog(QDialog):
-    def __init__(
-        self,
-        parent: QWidget | None,
-        estado: MutableMapping[str, Any],
-        skus_info: Any,
-        config_path: str,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("⚖️ Regras (oferta/cupom)")
-        self.setMinimumSize(900, 600)
-
-        self.estado: MutableMapping[str, Any] = estado
-        self.skus_info: Any = skus_info
-        self.config_path: str = config_path
-
-        # garante que estado["rules"] exista
-        self.estado.setdefault("rules", carregar_regras(self.config_path))
-
-        # índices auxiliares
-        self._prod_index: dict[str, dict[str, Any]] = {}
-        self._offer_index: dict[str, dict[str, Any]] = {}
-
-        layout: QVBoxLayout = QVBoxLayout(self)
-
-        # ===== Abas com tabelas =====
-        self.tabs: QTabWidget = QTabWidget(self)
-        layout.addWidget(self.tabs)
-
-        # --- Aba: Cupons
-        self.tab_cupons: QWidget = QWidget(self)
-        v_cupons: QVBoxLayout = QVBoxLayout(self.tab_cupons)
-        self.tbl_cupons: QTableWidget = QTableWidget(self.tab_cupons)
-        self.tbl_cupons.setColumnCount(4)
-        self.tbl_cupons.setHorizontalHeaderLabels(["Cupom", "Tipo de ação", "Box/Brindes", "Plano"])
-        self.tbl_cupons.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.tbl_cupons.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.tbl_cupons.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.tbl_cupons.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        v_cupons.addWidget(self.tbl_cupons)
-        self.tabs.addTab(self.tab_cupons, "Cupons")
-
-        # --- Aba: Ofertas
-        self.tab_ofertas: QWidget = QWidget(self)
-        v_ofertas: QVBoxLayout = QVBoxLayout(self.tab_ofertas)
-        self.tbl_ofertas: QTableWidget = QTableWidget(self.tab_ofertas)
-        self.tbl_ofertas.setColumnCount(2)
-        self.tbl_ofertas.setHorizontalHeaderLabels(["Nome da oferta", "Brinde"])
-        self.tbl_ofertas.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.tbl_ofertas.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.tbl_ofertas.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.tbl_ofertas.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        v_ofertas.addWidget(self.tbl_ofertas)
-        self.tabs.addTab(self.tab_ofertas, "Ofertas")
-
-        # ===== Botões =====
-        linha_btns: QHBoxLayout = QHBoxLayout()
-        self.btn_add = QPushButton("+ Adicionar")
-        self.btn_edit = QPushButton("✏️ Editar")
-        self.btn_dup = QPushButton("📄 Duplicar")
-        self.btn_del = QPushButton("🗑️ Remover")
-        self.btn_up = QPushButton("⬆️ Subir")
-        self.btn_down = QPushButton("⬇️ Descer")
-        self.btn_salvar = QPushButton("💾 Salvar")
-        linha_btns.addWidget(self.btn_add)
-        linha_btns.addWidget(self.btn_edit)
-        linha_btns.addWidget(self.btn_dup)
-        linha_btns.addWidget(self.btn_del)
-        linha_btns.addStretch(1)
-        linha_btns.addWidget(self.btn_up)
-        linha_btns.addWidget(self.btn_down)
-        linha_btns.addWidget(self.btn_salvar)
-        layout.addLayout(linha_btns)
-
-        # mapas (linha -> índice global em estado["rules"])
-        self._map_cupons: list[int] = []
-        self._map_ofertas: list[int] = []
-
-        # Conexões
-        self.btn_add.clicked.connect(self._add)
-        self.btn_edit.clicked.connect(self._edit)
-        self.btn_dup.clicked.connect(self._dup)
-        self.btn_del.clicked.connect(self._del)
-        self.btn_up.clicked.connect(self._up)
-        self.btn_down.clicked.connect(self._down)
-        self.btn_salvar.clicked.connect(self._salvar)
-
-        # índices e preenchimento
-        self._build_indices()
-        self._refresh_tables()
-
-    # ---------- índices / helpers ----------
-    def _build_indices(self) -> None:
-        """Monta índices de produto/oferta a partir do estado."""
-        produtos = self.estado.get("produtos_guru") or []
-        self._prod_index = {}
-        self._offer_index = {}
-
-        for p in produtos:
-            pid = str(p.get("id") or p.get("product_id") or "")
-            if pid:
-                self._prod_index[pid] = p
-            for o in p.get("offers") or []:
-                oid = str(o.get("id") or o.get("oferta_id") or "")
-                if oid:
-                    self._offer_index[oid] = o
-
-        for o in self.estado.get("ofertas_guru") or []:
-            oid = str(o.get("id") or o.get("oferta_id") or "")
-            if oid and oid not in self._offer_index:
-                self._offer_index[oid] = o
-
-    def _label_produto(self, produto_id: str) -> str:
-        """Exibe marketplace_id - nome; fallback para product_id se faltar."""
-        p = self._prod_index.get(str(produto_id))
-        if not p:
-            return f"{produto_id or '?'}"
-        mkt = p.get("marketplace_id") or p.get("shopify_id") or p.get("marketplaceId")
-        nome = p.get("title") or p.get("name") or p.get("nome") or f"Produto {produto_id}"
-        return f"{mkt} - {nome}" if mkt else f"{produto_id} - {nome}"
-
-    def _label_oferta(self, oferta_id: object) -> str:
-        oid = str(oferta_id or "")
-        o = self._offer_index.get(oid)
-        nome = o.get("name") if o else None
-        if not nome:
-            nome = (o or {}).get("nome") or (o or {}).get("title")
-        return nome or oid or "?"
-
-    def _format_assinaturas(self, r: Mapping[str, Any]) -> str:
-        raw = (
-            r.get("assinaturas")
-            or (r.get("cupom") or {}).get("assinaturas")
-            or (r.get("oferta") or {}).get("assinaturas")
-            or []
-        )
-        if isinstance(raw, str):
-            raw = [raw]
-
-        def pretty(s: str) -> str:
-            if not s:
-                return ""
-            t = str(s).strip()
-            t = re.sub(r"\s*\(.*?\)\s*", "", t, flags=re.I)  # remove parênteses
-            t = re.sub(r"^\s*assinatura\s+", "", t, flags=re.I)
-            t = re.split(r"\s*[\u2013\u2014-]\s*", t)[0].strip()
-            m = re.search(r"(\d+)\s*anos?", t, flags=re.I)
-            if m:
-                return f"{int(m.group(1))} anos"
-            if re.search(r"\banual\b", t, flags=re.I):
-                return "Anual"
-            if re.search(r"\bbimestral\b", t, flags=re.I):
-                return "Bimestral"
-            if re.search(r"\bmensal\b", t, flags=re.I):
-                return "Mensal"
-            return t.title()
-
-        vistos: set[str] = set()
-        out: list[str] = []
-        for item in raw:
-            ptxt = pretty(str(item))
-            k = ptxt.lower()
-            if ptxt and k not in vistos:
-                vistos.add(k)
-                out.append(ptxt)
-        return ", ".join(out)
-
-    def _tipo_acao(self, a: dict[str, Any] | None) -> str:
-        return (a or {}).get("type") or (a or {}).get("acao") or ""
-
-    def _coletar_brindes(self, action: dict[str, Any] | None) -> list[dict[str, Any]]:
-        if not action:
-            return []
-        keys = ["brindes", "gifts", "add_items", "add", "extras", "itens", "items"]
-        val = next((action.get(k) for k in keys if action.get(k) is not None), None)
-        if val is None:
-            return []
-        if isinstance(val, dict):
-            val = [val]
-        itens: list[dict[str, Any]] = []
-        for g in val:
-            if isinstance(g, str):
-                itens.append({"nome": g.strip(), "qtd": 1})
-            elif isinstance(g, dict):
-                qtd = g.get("qtd") or g.get("qty") or g.get("quantidade") or 1
-                pid = g.get("produto_id")
-                nome = (
-                    (g.get("nome") or "").strip()
-                    or (self._label_produto(str(pid)) if pid is not None else "").strip()
-                    or (g.get("sku") or "").strip()
-                    or "?"
-                )
-                itens.append({"nome": nome, "qtd": int(qtd)})
-
-        agg: OrderedDict[str, int] = OrderedDict()
-        for it in itens:
-            agg[it["nome"]] = agg.get(it["nome"], 0) + it["qtd"]
-        return [{"nome": k, "qtd": v} for k, v in agg.items()]
-
-    def _pegar_box(self, action: dict[str, Any] | None) -> str:
-        if not action:
-            return ""
-        for k in ["novo_box", "box", "replace_box", "swap_box", "box_name"]:
-            if action.get(k):
-                return str(action[k]).strip()
-        return ""
-
-    # ---------- UI refresh ----------
-    def _refresh_tables(self) -> None:
-        # reconstruir índices caso o estado tenha sido atualizado externamente
-        self._build_indices()
-
-        # zera as tabelas e mapas
-        self.tbl_cupons.setRowCount(0)
-        self.tbl_ofertas.setRowCount(0)
-        self._map_cupons = []
-        self._map_ofertas = []
-
-        for i, r in enumerate(self.estado["rules"]):
-            a = r.get("action") or {}
-            if r.get("applies_to") == "cupom":
-                # colunas: Cupom | Tipo de ação | Box/Brindes | Plano
-                cupom = ((r.get("cupom") or {}).get("nome") or "").strip() or "—"
-                tipo = self._tipo_acao(a) or "—"
-                box = self._pegar_box(a)
-                if tipo == "adicionar_brindes":
-                    brindes = self._coletar_brindes(a)
-                    box_ou_brindes = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes) or "—"
-                else:
-                    box_ou_brindes = box or "—"
-                plano = self._format_assinaturas(r) or "—"
-
-                row = self.tbl_cupons.rowCount()
-                self.tbl_cupons.insertRow(row)
-                self.tbl_cupons.setItem(row, 0, QTableWidgetItem(cupom))
-                self.tbl_cupons.setItem(row, 1, QTableWidgetItem(tipo))
-                self.tbl_cupons.setItem(row, 2, QTableWidgetItem(box_ou_brindes))
-                self.tbl_cupons.setItem(row, 3, QTableWidgetItem(plano))
-                self._map_cupons.append(i)
-
-            else:  # oferta
-                # colunas: Nome da oferta | Brinde
-                of = r.get("oferta") or {}
-                nome = (of.get("nome") or self._label_oferta(of.get("oferta_id")) or "—").strip()
-                brinde = ""
-                if self._tipo_acao(a) == "adicionar_brindes":
-                    brindes = self._coletar_brindes(a)
-                    brinde = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes)
-                brinde = brinde or "—"
-
-                row = self.tbl_ofertas.rowCount()
-                self.tbl_ofertas.insertRow(row)
-                self.tbl_ofertas.setItem(row, 0, QTableWidgetItem(nome))
-                self.tbl_ofertas.setItem(row, 1, QTableWidgetItem(brinde))
-                self._map_ofertas.append(i)
-
-    # ---------- helpers de seleção ----------
-    def _current_table_and_map(self) -> tuple[QTableWidget, list[int]]:
-        if self.tabs.currentWidget() is self.tab_cupons:
-            return self.tbl_cupons, self._map_cupons
-        return self.tbl_ofertas, self._map_ofertas
-
-    def _selected_index(self) -> int | None:
-        table, idx_map = self._current_table_and_map()
-        row = table.currentRow()
-        if row < 0 or row >= len(idx_map):
-            return None
-        return idx_map[row]
-
-    # ---------- ações ----------
-    def _add(self) -> None:
-        dlg = RuleEditorDialog(self, self.skus_info, regra=None, produtos_guru=self.estado.get("produtos_guru"))
-        if dlg.exec_() == QDialog.Accepted:
-            self.estado["rules"].append(dlg.get_regra())
-            self._refresh_tables()
-
-    def _edit(self) -> None:
-        idx = self._selected_index()
-        if idx is None:
-            return
-        regra = self.estado["rules"][idx]
-        dlg = RuleEditorDialog(self, self.skus_info, regra=regra, produtos_guru=self.estado.get("produtos_guru"))
-        if dlg.exec_() == QDialog.Accepted:
-            self.estado["rules"][idx] = dlg.get_regra()
-            self._refresh_tables()
-            self._reselect(idx)
-
-    def _dup(self) -> None:
-        idx = self._selected_index()
-        if idx is None:
-            return
-        r = json.loads(json.dumps(self.estado["rules"][idx]))  # deep copy
-        r["id"] = gerar_uuid()
-        self.estado["rules"].insert(idx + 1, r)
-        self._refresh_tables()
-        self._reselect(idx + 1)
-
-    def _del(self) -> None:
-        idx = self._selected_index()
-        if idx is None:
-            return
-        if (
-            QMessageBox.question(self, "Confirmar", "Excluir esta regra?", QMessageBox.Yes | QMessageBox.No)
-            == QMessageBox.Yes
-        ):
-            del self.estado["rules"][idx]
-            self._refresh_tables()
-
-    def _up(self) -> None:
-        idx = self._selected_index()
-        if idx is None:
-            return
-        self._move_relative_in_group(idx, -1)
-
-    def _down(self) -> None:
-        idx = self._selected_index()
-        if idx is None:
-            return
-        self._move_relative_in_group(idx, +1)
-
-    def _salvar(self) -> None:
-        try:
-            salvar_regras(self.config_path, self.estado["rules"])
-            QMessageBox.information(self, "Salvo", "Regras salvas em config_ofertas.json.")
-        except Exception as e:
-            QMessageBox.critical(self, "Erro", f"Falha ao salvar: {e}")
-
-    # ---------- movimento preservando o agrupamento ----------
-    def _move_relative_in_group(self, idx_global: int, delta: int) -> None:
-        """Move a regra idx_global para cima/baixo, mas apenas trocando com vizinhos do MESMO grupo
-        (applies_to)."""
-        if not -1 <= delta <= 1 or delta == 0:
-            return
-        rules = self.estado["rules"]
-        if not 0 <= idx_global < len(rules):
-            return
-        group = rules[idx_global].get("applies_to") or "oferta"
-        j = idx_global + delta
-        while 0 <= j < len(rules) and (rules[j].get("applies_to") or "oferta") != group:
-            j += delta
-        if 0 <= j < len(rules):
-            rules[idx_global], rules[j] = rules[j], rules[idx_global]
-            self._refresh_tables()
-            self._reselect(j)
-
-    def _reselect(self, idx_global: int) -> None:
-        """Após refresh, reposiciona a seleção na aba/tabela correspondente a idx_global."""
-        r = self.estado["rules"][idx_global]
-        if r.get("applies_to") == "cupom":
-            for row, gi in enumerate(self._map_cupons):
-                if gi == idx_global:
-                    self.tabs.setCurrentWidget(self.tab_cupons)
-                    self.tbl_cupons.setCurrentCell(row, 0)
-                    return
-        else:
-            for row, gi in enumerate(self._map_ofertas):
-                if gi == idx_global:
-                    self.tabs.setCurrentWidget(self.tab_ofertas)
-                    self.tbl_ofertas.setCurrentCell(row, 0)
-                    return
-
-
-############################################
-# Função para abrir o gerenciador (wire)
-############################################
-
-
-def abrir_mapeador_regras(
-    estado: MutableMapping[str, Any],
-    skus_info: Any,
-) -> None:
-    config_path = os.path.join(os.path.dirname(__file__), "config_ofertas.json")
-    # opcional: carregar produtos do Guru para o editor
-    try:
-        estado["produtos_guru"] = buscar_todos_produtos_guru()
-    except Exception:
-        estado["produtos_guru"] = []
-    dlg = RuleManagerDialog(None, estado, skus_info, config_path)
-    dlg.exec_()
-
-
-def buscar_ofertas_do_produto(product_id: str) -> list[dict[str, Any]]:
-    url = f"{BASE_URL_GURU}/products/{product_id}/offers"
-    headers = HEADERS_GURU
-    ofertas: list[dict[str, Any]] = []
-    cursor: str | None = None
-    pagina = 1
-
-    while True:
-        try:
-            params: dict[str, Any] = {"limit": 100}
-            if cursor:
-                params["cursor"] = cursor
-
-            r = http_get(url, headers=headers, params=params, timeout=10)
-            if r.status_code != 200:
-                print(f"[❌ Guru] Erro {r.status_code} ao buscar ofertas do produto {product_id}: {r.text}")
-                break
-
-            data: dict[str, Any] = r.json()
-            pagina_dados = data.get("data", [])
-            print(f"[📄 Página {pagina}] {len(pagina_dados)} ofertas encontradas para produto {product_id}")
-
-            ofertas += pagina_dados
-            cursor = data.get("next_cursor")
-
-            if not cursor:
-                break
-
-            pagina += 1
-
-        except Exception as e:
-            print(f"[❌ Guru] Exceção ao buscar ofertas do produto {product_id}: {e}")
-            break
-
-    print(f"[✅ Guru] Total de ofertas carregadas para o produto {product_id}: {len(ofertas)}")
-    return ofertas
-
-
-ASSINATURAS, GURU_META = obter_ids_assinaturas_por_duracao(skus_info)
-
-ASSINATURAS_MENSAIS = ASSINATURAS.get("mensal", [])
-ASSINATURAS_BIMESTRAIS = ASSINATURAS.get("bimestral", [])
-ASSINATURAS_ANUAIS = ASSINATURAS.get("anual", [])
-ASSINATURAS_BIANUAIS = ASSINATURAS.get("bianual", [])
-ASSINATURAS_TRIANUAIS = ASSINATURAS.get("trianual", [])
-
-# API SHOPIFY
-
-
-def obter_api_shopify_version(now: datetime | None = None) -> str:
-    """Retorna a versão trimestral da Shopify API (YYYY-01/04/07/10).
-
-    Usa datetime aware (UTC por padrão). 'now' é opcional (útil para testes).
-    """
-    dt = now or datetime.now(UTC)
-    y, m = dt.year, dt.month
-    q_start = ((m - 1) // 3) * 3 + 1  # 1, 4, 7, 10
-    return f"{y}-{q_start:02d}"
-
-
-API_VERSION = obter_api_shopify_version()
-GRAPHQL_URL = f"https://{settings.SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
-
-
-class _DadosTemp(TypedDict, total=False):
-    cpfs: dict[str, Any]
-    bairros: dict[str, Any]
-    enderecos: dict[str, Any]
-
-
-# Inicializa/garante o tipo de estado["dados_temp"] apenas aqui
-dt = cast(_DadosTemp, estado.setdefault("dados_temp", {}))
-dt.setdefault("cpfs", {})
-dt.setdefault("bairros", {})
-dt.setdefault("enderecos", {})
-
-# Controle de taxa global
-controle_shopify = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
-MIN_INTERVALO_GRAPHQL = 0.1  # 100ms (100 chamadas/s)
-
-# API OPENAI
-
-client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
 
 
 # Gerenciamento de barra de progresso na interface.
@@ -1636,9 +578,1323 @@ def iniciar_progresso(
     return gerenciador
 
 
-# Integração com a API do Digital Manager Guru
 class HasIsSet(Protocol):
     def is_set(self) -> bool: ...
+
+
+# Integração com a API do Digital Manager Guru
+
+
+# Mapear produtos do Guru (serviço backend, sem UI)
+def buscar_todos_produtos_guru() -> list[dict[str, Any]]:
+    url = f"{BASE_URL_GURU}/products"
+    headers = HEADERS_GURU
+    produtos: list[dict[str, Any]] = []
+    cursor: str | None = None
+    pagina = 1
+
+    while True:
+        try:
+            params: dict[str, Any] = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+
+            r = http_get(url, headers=headers, params=params, timeout=10)
+            if r.status_code != 200:
+                print(f"[❌ Guru] Erro {r.status_code} ao buscar produtos: {r.text}")
+                break
+
+            data: dict[str, Any] = r.json()
+            pagina_dados = data.get("data", [])
+            print(f"[📄 Página {pagina}] {len(pagina_dados)} produtos encontrados")
+
+            produtos += pagina_dados  # esperado: list[dict[str, Any]]
+            cursor = data.get("next_cursor")
+
+            if not cursor:
+                break
+
+            pagina += 1
+
+        except Exception as e:
+            print(f"[❌ Guru] Exceção ao buscar produtos: {e}")
+            break
+
+    print(f"[✅ Guru] Total de produtos carregados: {len(produtos)}")
+    return produtos
+
+
+def mapear_skus_com_produtos_guru(skus_info: MutableMapping[str, Any]) -> None:
+    produtos_guru = buscar_todos_produtos_guru()
+    if not produtos_guru:
+        QMessageBox.warning(None, "Erro", "Nenhum produto retornado do Guru.")
+        return
+    abrir_dialogo_mapeamento_guru(skus_info, produtos_guru, skus_path)
+
+
+# ===================== BACKEND PORTS (sem PyQt) =====================
+
+
+def listar_nomes_internos_por_tipo(
+    skus_map: Mapping[str, MutableMapping[str, Any]],
+    *,
+    is_assinatura: bool,
+) -> list[str]:
+    """Lista nomes internos conforme tipo (assinatura/produto)."""
+    if is_assinatura:
+        return sorted([n for n, info in skus_map.items() if cast(Mapping[str, Any], info).get("tipo") == "assinatura"])
+    return sorted([n for n, info in skus_map.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura"])
+
+
+def aplicar_mapeamento_guru(
+    skus_map: MutableMapping[str, Any],
+    *,
+    nome_base_raw: str,
+    novos_ids: list[str],
+    is_assinatura: bool,
+    duracao: str | None,
+    periodicidade: str | None,
+    skus_json_path: str,
+) -> str:
+    """
+    Porta de backend: aplica regra de mapeamento Guru → produto interno e persiste.
+
+    Retorna a chave destino (ex.: "Nome (mensal)" ou "Nome").
+    """
+    if is_assinatura:
+        if not periodicidade:
+            raise UserError("Periodicidade obrigatória para assinatura", code="BAD_PERIODICIDADE")
+        # normaliza chave destino com sufixo (mensal/bimestral)
+        nome_base = re.sub(r"\s*\((mensal|bimestral)\)\s*$", "", nome_base_raw, flags=re.IGNORECASE).strip()
+        dest_key = f"{nome_base} ({periodicidade.strip().lower()})"
+    else:
+        dest_key = nome_base_raw
+        duracao = None
+        periodicidade = None
+
+    # migração legado (sem sufixo -> com sufixo) somente para assinatura
+    if is_assinatura and dest_key != nome_base_raw and nome_base_raw in skus_map:
+        legado = cast(Mapping[str, Any], skus_map.pop(nome_base_raw) or {})
+        alvo = cast(MutableMapping[str, Any], skus_map.setdefault(dest_key, {}))
+        for k_list in ("guru_ids", "shopify_ids", "composto_de"):
+            v = cast(Sequence[Any] | None, legado.get(k_list))
+            if v:
+                alvo.setdefault(k_list, [])
+                for x in v:
+                    if x not in alvo[k_list]:
+                        alvo[k_list].append(x)
+        for k, v in legado.items():
+            if k not in ("guru_ids", "shopify_ids", "composto_de"):
+                alvo.setdefault(k, v)
+
+    # cria/atualiza entrada destino
+    entrada = cast(MutableMapping[str, Any], skus_map.setdefault(dest_key, {}))
+    if is_assinatura:
+        entrada["tipo"] = "assinatura"
+        entrada["recorrencia"] = (duracao or "").strip().lower()
+        entrada["periodicidade"] = (periodicidade or "").strip().lower()
+        entrada.setdefault("sku", "")
+        entrada.setdefault("peso", 0.0)
+        entrada.setdefault("composto_de", [])
+    else:
+        entrada["tipo"] = "produto"
+        entrada.pop("recorrencia", None)
+        entrada.pop("periodicidade", None)
+
+    entrada.setdefault("guru_ids", [])
+    ja = set(map(str, cast(Sequence[Any], entrada["guru_ids"])))
+    for gid in novos_ids:
+        if gid and gid not in ja:
+            entrada["guru_ids"].append(gid)
+            ja.add(gid)
+
+    # persiste em disco
+    with open(skus_json_path, "w", encoding="utf-8") as f:
+        json.dump(skus_map, f, indent=4, ensure_ascii=False)
+
+    return dest_key
+
+
+# --------------------- UI DIALOGO MAPEAMENTO GURU ---------------------
+def abrir_dialogo_mapeamento_guru(
+    skus_info: Mapping[str, MutableMapping[str, Any]],
+    produtos_guru: Sequence[Mapping[str, Any]] | None,
+    skus_path: str,
+) -> None:
+    class DialogoMapeamento(QDialog):
+        def __init__(self) -> None:
+            super().__init__()
+            self.setWindowTitle("Mapear Produtos do Guru para Produtos Internos")
+            self.setMinimumSize(800, 500)
+            self.main_layout = QVBoxLayout(self)
+
+            # mantém referências (UI → backend)
+            self.skus_info: MutableMapping[str, Any] = cast(MutableMapping[str, Any], skus_info)
+            self.produtos: list[dict[str, Any]] = [dict(p) for p in (produtos_guru or [])]
+            self.produtos_restantes: list[dict[str, Any]] = list(self.produtos)
+
+            # Seletor de produto interno
+            linha_nome: QHBoxLayout = QHBoxLayout()
+            linha_nome.addWidget(QLabel("Selecionar produto interno:"))
+            self.combo_nome_interno = QComboBox()
+            self.combo_nome_interno.setEditable(False)
+            linha_nome.addWidget(self.combo_nome_interno)
+            self.main_layout.addLayout(linha_nome)
+
+            # Lista de produtos do Guru
+            self.lista = QListWidget()
+            self.lista.setSelectionMode(QListWidget.MultiSelection)
+            self.main_layout.addWidget(QLabel("Selecione os produtos do Guru a associar:"))
+            self.main_layout.addWidget(self.lista)
+
+            # Tipo: assinatura ou produto
+            linha_tipo: QHBoxLayout = QHBoxLayout()
+            self.radio_produto = QRadioButton("Produto")
+            self.radio_assinatura = QRadioButton("Assinatura")
+            self.radio_produto.setChecked(True)
+            self.grupo_tipo = QButtonGroup()
+            self.grupo_tipo.addButton(self.radio_produto)
+            self.grupo_tipo.addButton(self.radio_assinatura)
+            linha_tipo.addWidget(QLabel("Tipo:"))
+            linha_tipo.addWidget(self.radio_produto)
+            linha_tipo.addWidget(self.radio_assinatura)
+            self.main_layout.addLayout(linha_tipo)
+
+            # Assinatura: duração + periodicidade
+            self.widget_assinatura = QWidget()
+            linha_assin: QHBoxLayout = QHBoxLayout(self.widget_assinatura)
+            self.combo_duracao = QComboBox()
+            self.combo_duracao.addItems(["mensal", "bimestral", "anual", "bianual", "trianual"])
+            linha_assin.addWidget(QLabel("Duração do plano:"))
+            linha_assin.addWidget(self.combo_duracao)
+
+            self.combo_periodicidade = QComboBox()
+            self.combo_periodicidade.addItems(["mensal", "bimestral"])
+            linha_assin.addWidget(QLabel("Periodicidade (envio):"))
+            linha_assin.addWidget(self.combo_periodicidade)
+            self.main_layout.addWidget(self.widget_assinatura)
+
+            self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
+
+            # Recarrega nomes internos quando muda o tipo
+            self.radio_assinatura.toggled.connect(lambda _checked: self._on_tipo_changed())
+            self.radio_produto.toggled.connect(lambda _checked: self._on_tipo_changed())
+
+            # Botões
+            botoes: QHBoxLayout = QHBoxLayout()
+            self.btn_salvar = QPushButton("Salvar e Próximo")
+            self.btn_cancelar = QPushButton("Cancelar")
+            botoes.addWidget(self.btn_salvar)
+            botoes.addWidget(self.btn_cancelar)
+            self.main_layout.addLayout(botoes)
+
+            self.btn_salvar.clicked.connect(self.salvar_selecao)
+            self.btn_cancelar.clicked.connect(self.reject)
+
+            # Inicializa listas e combo
+            self._recarregar_combo_interno()
+            self.iniciar()
+
+        # ----- UI helpers (sem regra) -----
+        def _on_tipo_changed(self) -> None:
+            self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
+            self._recarregar_combo_interno()
+
+        def _recarregar_combo_interno(self) -> None:
+            self.combo_nome_interno.blockSignals(True)
+            self.combo_nome_interno.clear()
+            nomes = listar_nomes_internos_por_tipo(
+                self.skus_info,
+                is_assinatura=self.radio_assinatura.isChecked(),
+            )
+            self.combo_nome_interno.addItems(nomes)
+            self.combo_nome_interno.blockSignals(False)
+
+        # ----- UI data -----
+        def iniciar(self) -> None:
+            self.lista.clear()
+            termo = ""  # sem filtro por enquanto
+            for p in self.produtos:
+                titulo = (p.get("name") or "").strip()
+                product_id = str(p.get("id") or "").strip()
+                market_id = str(p.get("marketplace_id") or "").strip()
+                if not titulo and not market_id and not product_id:
+                    continue
+
+                alvo = unidecode(f"{titulo} {market_id}".lower())
+                if termo and termo not in alvo:
+                    continue
+
+                label = f"{titulo} (id:{market_id})" if market_id else f"{titulo} (id:{product_id})"
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, product_id)
+                item.setData(Qt.UserRole + 1, market_id)
+                item.setToolTip(f"marketplace_id: {market_id or '-'}\nproduct_id: {product_id or '-'}")
+                self.lista.addItem(item)
+
+        # ----- salvar (UI → chama BACKEND PORT) -----
+        def salvar_selecao(self) -> None:
+            nome_base_raw = self.combo_nome_interno.currentText().strip()
+            if not nome_base_raw:
+                QMessageBox.warning(self, "Aviso", "Você precisa selecionar um produto interno.")
+                return
+
+            itens = self.lista.selectedItems()
+            if not itens:
+                QMessageBox.warning(self, "Aviso", "Você precisa selecionar ao menos um produto do Guru.")
+                return
+
+            novos_ids: list[str] = [str(it.data(Qt.UserRole) or "").strip() for it in itens]
+            novos_ids = [gid for gid in novos_ids if gid]
+
+            is_assinatura = self.radio_assinatura.isChecked()
+            duracao = self.combo_duracao.currentText().strip().lower() if is_assinatura else None
+            periodicidade = self.combo_periodicidade.currentText().strip().lower() if is_assinatura else None
+
+            # Chamada única ao BACKEND
+            try:
+                dest_key = aplicar_mapeamento_guru(
+                    cast(MutableMapping[str, Any], self.skus_info),
+                    nome_base_raw=nome_base_raw,
+                    novos_ids=novos_ids,
+                    is_assinatura=is_assinatura,
+                    duracao=duracao,
+                    periodicidade=periodicidade,
+                    skus_json_path=skus_path,
+                )
+            except UserError as ue:
+                QMessageBox.warning(self, "Aviso", str(ue))
+                return
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Falha ao salvar mapeamento: {e}")
+                return
+
+            QMessageBox.information(self, "Sucesso", f"'{dest_key}' mapeado com sucesso!")
+            self.lista.clearSelection()
+            self.iniciar()
+
+    dlg = DialogoMapeamento()
+    dlg.exec_()
+
+
+# =====================================================================
+# ===================== BACKEND / REGRAS (sem PyQt) ====================
+# =====================================================================
+
+
+def obter_ids_assinaturas_por_duracao(
+    skus_info: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
+    assinaturas: dict[str, list[str]] = {
+        "mensal": [],
+        "bimestral": [],
+        "anual": [],
+        "bianual": [],
+        "trianual": [],
+    }
+    # mapa auxiliar: guru_id -> {"recorrencia":..., "periodicidade":...}
+    guru_meta: dict[str, dict[str, str]] = {}
+
+    for _nome, info in skus_info.items():
+        if (info.get("tipo") or "").lower() == "assinatura":
+            ids = info.get("guru_ids", [])
+            dur = (info.get("recorrencia") or "").lower()
+            per = (info.get("periodicidade") or "").lower()
+            for gid in ids:
+                if dur in assinaturas:
+                    assinaturas[dur].append(str(gid))
+                guru_meta[str(gid)] = {"recorrencia": dur, "periodicidade": per}
+
+    return assinaturas, guru_meta
+
+
+def gerar_uuid() -> str:
+    return str(uuid.uuid4())
+
+
+############################################
+# Diálogo de Edição de Regra
+############################################
+
+# =====================================================================
+# ===================== BACKEND PORTS (sem PyQt) ======================
+# =====================================================================
+
+
+def listar_assinaturas_nomes(skus_info: Mapping[str, Any]) -> list[str]:
+    """Lista nomes de SKUs do tipo 'assinatura'."""
+    return sorted(n for n, info in skus_info.items() if cast(Mapping[str, Any], info).get("tipo") == "assinatura")
+
+
+def listar_produtos_simples(skus_info: Mapping[str, Any]) -> list[str]:
+    """Lista nomes de produtos não-assinatura e não-composto (para alterar_box)."""
+    return sorted(
+        n
+        for n, info in skus_info.items()
+        if cast(Mapping[str, Any], info).get("tipo") != "assinatura"
+        and not cast(Mapping[str, Any], info).get("composto_de")
+    )
+
+
+def listar_brindes_possiveis(skus_info: Mapping[str, Any]) -> list[str]:
+    """Lista nomes de itens não-assinatura (podem ser usados como brindes)."""
+    return sorted(n for n, info in skus_info.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura")
+
+
+def carregar_ofertas_produto(prod_id: str) -> list[dict[str, Any]]:
+    """Porta para buscar ofertas de um produto Guru (sem PyQt)."""
+    if not prod_id:
+        return []
+
+    catalog = GuruCatalogService(base_url=BASE_URL_GURU, headers=HEADERS_GURU, http_get=http_get)
+    ofertas = catalog.buscar_ofertas_do_produto(prod_id) or []
+
+    # normaliza estrutura mínima esperada
+    norm = []
+    for o in ofertas:
+        oid = str(o.get("id", "") or "")
+        nome = str(o.get("name") or oid or "Oferta")
+        norm.append({"id": oid, "name": nome})
+    return norm
+
+
+def criar_regra(
+    *,
+    regra_antiga: dict[str, Any] | None,
+    applies_to: Literal["oferta", "cupom"],
+    action_type: Literal["alterar_box", "adicionar_brindes"],
+    # CUPOM
+    cupom_nome: str | None = None,
+    assinaturas_sel: list[str] | None = None,
+    # OFERTA
+    prod_id: str | None = None,
+    oferta_id: str | None = None,
+    oferta_nome: str | None = None,
+    # ACTION PAYLOAD
+    box_substituto: str | None = None,
+    brindes_sel: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Constrói o dicionário da regra a partir de inputs da UI.
+    Gera id (uuid) quando necessário. Sem PyQt aqui.
+    """
+    rid = (regra_antiga or {}).get("id") or gerar_uuid()
+
+    regra_nova: dict[str, Any] = {
+        "id": rid,
+        "applies_to": applies_to,
+        "action": {"type": action_type},
+    }
+
+    if applies_to == "cupom":
+        if not cupom_nome:
+            raise UserError("Informe o nome do cupom.", code="BAD_CUPOM")
+        regra_nova["cupom"] = {"nome": cupom_nome.strip().upper()}
+        if assinaturas_sel:
+            # remove duplicados, preservando ordem
+            regra_nova["assinaturas"] = list(dict.fromkeys(assinaturas_sel))
+
+    else:  # oferta
+        if not (prod_id and oferta_id):
+            raise UserError("Selecione produto e oferta do Guru.", code="BAD_OFERTA")
+        regra_nova["oferta"] = {
+            "produto_id": str(prod_id).strip(),
+            "oferta_id": str(oferta_id).strip(),
+            "nome": str(oferta_nome or "").strip(),
+        }
+
+    if action_type == "alterar_box":
+        if not (box_substituto and box_substituto.strip()):
+            raise UserError("Selecione o box substituto.", code="BAD_BOX")
+        regra_nova["action"]["box"] = box_substituto.strip()
+    else:
+        if not brindes_sel:
+            raise UserError("Selecione ao menos um brinde.", code="BAD_BRINDES")
+        regra_nova["action"]["brindes"] = list(dict.fromkeys(brindes_sel))
+
+    return regra_nova
+
+
+# =====================================================================
+# ===================== UI / FRONTEND (PyQt) ===========================
+# =====================================================================
+
+
+class RuleEditorDialog(QDialog):
+    """Editor de uma regra individual (UI).
+    Cria/edita um dict no formato:
+      { "id": "...", "applies_to": "oferta"|"cupom", ... }
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        skus_info: Mapping[str, Any],
+        regra: dict[str, Any] | None = None,
+        produtos_guru: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Regra (Oferta/Cupom)")
+        self.setMinimumWidth(600)
+
+        # Referências (UI → backend)
+        self.skus_info: Mapping[str, Any] = skus_info
+        self.regra: dict[str, Any] = regra or {}
+        self.produtos_guru: list[dict[str, Any]] = produtos_guru or []
+
+        layout: QVBoxLayout = QVBoxLayout(self)
+
+        # ====== Aplica a: oferta | cupom ======
+        linha_aplica: QHBoxLayout = QHBoxLayout()
+        linha_aplica.addWidget(QLabel("Aplica a:"))
+        self.combo_aplica = QComboBox()
+        self.combo_aplica.addItems(["oferta", "cupom"])
+        linha_aplica.addWidget(self.combo_aplica)
+        layout.addLayout(linha_aplica)
+
+        # ====== CUPOM ======
+        self.widget_cupom = QWidget()
+        layout_cupom: QHBoxLayout = QHBoxLayout(self.widget_cupom)
+        layout_cupom.setContentsMargins(0, 0, 0, 0)
+        layout_cupom.addWidget(QLabel("Cupom:"))
+        self.input_cupom = QLineEdit()
+        layout_cupom.addWidget(self.input_cupom)
+
+        # ====== OFERTA ======
+        self.widget_oferta = QWidget()
+        layout_oferta: QVBoxLayout = QVBoxLayout(self.widget_oferta)
+        layout_oferta.setContentsMargins(0, 0, 0, 0)
+
+        linha_prod: QHBoxLayout = QHBoxLayout()
+        linha_prod.addWidget(QLabel("Produto (Guru):"))
+        self.combo_produto_guru = QComboBox()
+        self.combo_produto_guru.setEditable(True)
+
+        # Preencher produtos do Guru se fornecidos (opcional)
+        for p in self.produtos_guru:
+            texto = f'{p.get("name","") or p.get("id","")}  [{p.get("id","")}]'
+            self.combo_produto_guru.addItem(texto, p.get("id"))
+        linha_prod.addWidget(self.combo_produto_guru)
+
+        btn_carregar_ofertas = QPushButton("Carregar ofertas")
+        btn_carregar_ofertas.clicked.connect(self._carregar_ofertas)
+        linha_prod.addWidget(btn_carregar_ofertas)
+        layout_oferta.addLayout(linha_prod)
+
+        linha_oferta: QHBoxLayout = QHBoxLayout()
+        linha_oferta.addWidget(QLabel("Oferta:"))
+        self.combo_oferta = QComboBox()
+        linha_oferta.addWidget(self.combo_oferta)
+        layout_oferta.addLayout(linha_oferta)
+
+        # ====== Assinaturas (só para CUPOM) ======
+        self.widget_assinaturas = QGroupBox("Assinaturas (apenas para CUPOM)")
+        layout_ass: QVBoxLayout = QVBoxLayout(self.widget_assinaturas)
+        self.lista_assinaturas = QListWidget()
+        self.lista_assinaturas.setSelectionMode(QAbstractItemView.MultiSelection)
+        for nome in listar_assinaturas_nomes(self.skus_info):
+            self.lista_assinaturas.addItem(QListWidgetItem(nome))
+        layout_ass.addWidget(self.lista_assinaturas)
+
+        # ====== Ação ======
+        caixa_acao = QGroupBox("Ação")
+        layout_acao: QVBoxLayout = QVBoxLayout(caixa_acao)
+
+        linha_tipo: QHBoxLayout = QHBoxLayout()
+        linha_tipo.addWidget(QLabel("Tipo de ação:"))
+        self.combo_acao = QComboBox()
+        self.combo_acao.addItems(["alterar_box", "adicionar_brindes"])
+        linha_tipo.addWidget(self.combo_acao)
+        layout_acao.addLayout(linha_tipo)
+
+        # alterar_box → escolher box (produtos simples)
+        self.widget_alterar = QWidget()
+        layout_alt: QHBoxLayout = QHBoxLayout(self.widget_alterar)
+        layout_alt.setContentsMargins(0, 0, 0, 0)
+        layout_alt.addWidget(QLabel("Box substituto:"))
+        self.combo_box = QComboBox()
+        self.combo_box.addItems(listar_produtos_simples(self.skus_info))
+        layout_alt.addWidget(self.combo_box)
+
+        # adicionar_brindes → múltiplos brindes (qualquer item não-assinatura)
+        self.widget_brindes = QWidget()
+        layout_br: QVBoxLayout = QVBoxLayout(self.widget_brindes)
+        layout_br.setContentsMargins(0, 0, 0, 0)
+        self.lista_brindes = QListWidget()
+        self.lista_brindes.setSelectionMode(QAbstractItemView.MultiSelection)
+        for nome in listar_brindes_possiveis(self.skus_info):
+            self.lista_brindes.addItem(QListWidgetItem(nome))
+        layout_br.addWidget(QLabel("Brindes a adicionar:"))
+        layout_br.addWidget(self.lista_brindes)
+
+        layout_acao.addWidget(self.widget_alterar)
+        layout_acao.addWidget(self.widget_brindes)
+
+        # ====== Montagem/ordem no diálogo ======
+        layout.addWidget(self.widget_cupom)
+        layout.addWidget(self.widget_oferta)
+        layout.addWidget(self.widget_assinaturas)
+        layout.addWidget(caixa_acao)
+
+        # Botões OK/Cancelar
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        # sinais
+        self.combo_aplica.currentTextChanged.connect(self._toggle_aplica)
+        self.combo_acao.currentTextChanged.connect(self._toggle_acao)
+
+        # preencher se edição (UI)
+        self._hydrate(self.regra)
+        self._toggle_aplica(self.combo_aplica.currentText())
+        self._toggle_acao(self.combo_acao.currentText())
+
+    # ================= UI Helpers =================
+
+    def _hydrate(self, regra: Mapping[str, Any]) -> None:
+        applies_to = cast(str, regra.get("applies_to", "oferta"))
+        self.combo_aplica.setCurrentText(applies_to)
+
+        if applies_to == "cupom":
+            self.input_cupom.setText(str((regra.get("cupom") or {}).get("nome", "")))
+
+        if applies_to == "oferta":
+            prod_id = str((regra.get("oferta") or {}).get("produto_id", "") or "")
+            oferta_id = str((regra.get("oferta") or {}).get("oferta_id", "") or "")
+            idx_prod = max(0, self.combo_produto_guru.findData(prod_id))
+            self.combo_produto_guru.setCurrentIndex(idx_prod)
+
+            if prod_id:
+                self._carregar_ofertas()
+                oferta_id = str((regra.get("oferta") or {}).get("oferta_id", "") or "")
+                idx_of = self.combo_oferta.findData(oferta_id)
+
+                if idx_of == -1 and oferta_id:
+                    nome_existente = str((regra.get("oferta") or {}).get("nome", "") or "")
+                    display = f"{(nome_existente or oferta_id)} [{oferta_id}]"
+                    self.combo_oferta.addItem(display, oferta_id)
+                    idx_of = self.combo_oferta.count() - 1
+                    self.combo_oferta.setItemData(idx_of, nome_existente or "", Qt.UserRole + 1)
+
+                self.combo_oferta.setCurrentIndex(max(0, idx_of))
+
+        # assinaturas
+        assinaturas = cast(list[str], regra.get("assinaturas", []) or [])
+        if assinaturas:
+            selecionadas = set(assinaturas)
+            for i in range(self.lista_assinaturas.count()):
+                item = self.lista_assinaturas.item(i)
+                if item and item.text() in selecionadas:
+                    item.setSelected(True)
+
+        # ação
+        action = cast(Mapping[str, Any], regra.get("action", {}) or {})
+        self.combo_acao.setCurrentText(str(action.get("type", "alterar_box")))
+
+        if action.get("type") == "alterar_box":
+            box = str(action.get("box", "") or "")
+            idx = max(0, self.combo_box.findText(box))
+            self.combo_box.setCurrentIndex(idx)
+
+        if action.get("type") == "adicionar_brindes":
+            brindes = cast(list[str], action.get("brindes", []) or [])
+            selecionadas = set(brindes)
+            for i in range(self.lista_brindes.count()):
+                it = self.lista_brindes.item(i)
+                if it and it.text() in selecionadas:
+                    it.setSelected(True)
+
+    def _toggle_aplica(self, applies_to: str) -> None:
+        is_cupom = applies_to == "cupom"
+        self.widget_cupom.setVisible(is_cupom)
+        self.widget_assinaturas.setVisible(is_cupom)
+        self.widget_oferta.setVisible(applies_to == "oferta")
+
+    def _toggle_acao(self, tipo: str) -> None:
+        self.widget_alterar.setVisible(tipo == "alterar_box")
+        self.widget_brindes.setVisible(tipo == "adicionar_brindes")
+
+    def _carregar_ofertas(self) -> None:
+        # UI → chama backend e popula o combo
+        prod_data = self.combo_produto_guru.currentData()
+        prod_id = str(prod_data) if prod_data is not None else ""
+        if not prod_id:
+            txt = self.combo_produto_guru.currentText()
+            if "[" in txt and "]" in txt:
+                prod_id = txt.split("[")[-1].split("]")[0].strip()
+
+        self.combo_oferta.clear()
+        if not prod_id:
+            return
+
+        ofertas = carregar_ofertas_produto(prod_id)
+        for o in ofertas:
+            oid = o["id"]
+            nome = o["name"]
+            self.combo_oferta.addItem(f"{nome} [{oid}]", oid)
+            idx = self.combo_oferta.count() - 1
+            self.combo_oferta.setItemData(idx, nome, Qt.UserRole + 1)
+
+    def _accept(self) -> None:
+        applies_to = cast(Literal["oferta", "cupom"], self.combo_aplica.currentText())
+        action_type = cast(Literal["alterar_box", "adicionar_brindes"], self.combo_acao.currentText())
+
+        # Coleta inputs da UI
+        cupom_nome = None
+        assin_sel: list[str] | None = None
+        prod_id = None
+        of_id = None
+        of_nome = None
+        box_sub = None
+        brindes_sel: list[str] | None = None
+
+        if applies_to == "cupom":
+            cupom_nome = self.input_cupom.text().strip()
+            assin_sel = [it.text() for it in self.lista_assinaturas.selectedItems()]
+        else:
+            prod_data = self.combo_produto_guru.currentData()
+            prod_id = (str(prod_data) if prod_data is not None else "").strip()
+            if not prod_id:
+                txt_prod = self.combo_produto_guru.currentText()
+                if "[" in txt_prod and "]" in txt_prod:
+                    prod_id = txt_prod.split("[")[-1].split("]")[0].strip()
+            of_data = self.combo_oferta.currentData()
+            of_id = (str(of_data) if of_data is not None else "").strip()
+            idx_of = self.combo_oferta.currentIndex()
+            of_nome = self.combo_oferta.itemData(idx_of, Qt.UserRole + 1) or ""
+            if not of_nome:
+                of_text = (self.combo_oferta.currentText() or "").strip()
+                of_nome = of_text.split("[", 1)[0].strip() if "[" in of_text else of_text
+
+        if action_type == "alterar_box":
+            box_sub = self.combo_box.currentText().strip()
+        else:
+            brindes_sel = [it.text() for it in self.lista_brindes.selectedItems()]
+
+        # Backend: construir regra
+        try:
+            self.regra = criar_regra(
+                regra_antiga=self.regra,
+                applies_to=applies_to,
+                action_type=action_type,
+                cupom_nome=cupom_nome,
+                assinaturas_sel=assin_sel or [],
+                prod_id=prod_id,
+                oferta_id=of_id,
+                oferta_nome=of_nome,
+                box_substituto=box_sub,
+                brindes_sel=brindes_sel or [],
+            )
+        except UserError as ue:
+            QMessageBox.warning(self, "Validação", str(ue))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao montar regra: {e}")
+            return
+
+        self.accept()
+
+    def get_regra(self) -> dict[str, Any]:
+        return self.regra
+
+
+############################################
+# Diálogo principal: gerenciador de regras
+############################################
+
+# ----------------------------- BACKEND / REGRAS -----------------------------
+
+
+class RulesManager:
+    """Camada de domínio/serviço.
+    - Não importa PyQt.
+    - Manipula 'estado' e transforma em linhas de tabela.
+    """
+
+    def __init__(self, estado: MutableMapping[str, Any], skus_info: Any, config_path: str) -> None:
+        self.estado = estado
+        self.skus_info = skus_info
+        self.config_path = config_path
+        self.estado.setdefault("rules", carregar_regras(self.config_path))
+        self._prod_index: dict[str, dict[str, Any]] = {}
+        self._offer_index: dict[str, dict[str, Any]] = {}
+        self.build_indices()
+
+    # ---------- índices / helpers (domínio) ----------
+    def build_indices(self) -> None:
+        produtos = self.estado.get("produtos_guru") or []
+        self._prod_index.clear()
+        self._offer_index.clear()
+
+        for p in produtos:
+            pid = str(p.get("id") or p.get("product_id") or "")
+            if pid:
+                self._prod_index[pid] = p
+            for o in p.get("offers") or []:
+                oid = str(o.get("id") or o.get("oferta_id") or "")
+                if oid:
+                    self._offer_index[oid] = o
+
+        for o in self.estado.get("ofertas_guru") or []:
+            oid = str(o.get("id") or o.get("oferta_id") or "")
+            if oid and oid not in self._offer_index:
+                self._offer_index[oid] = o
+
+    def _label_produto(self, produto_id: str) -> str:
+        p = self._prod_index.get(str(produto_id))
+        if not p:
+            return f"{produto_id or '?'}"
+        mkt = p.get("marketplace_id") or p.get("shopify_id") or p.get("marketplaceId")
+        nome = p.get("title") or p.get("name") or p.get("nome") or f"Produto {produto_id}"
+        return f"{mkt} - {nome}" if mkt else f"{produto_id} - {nome}"
+
+    def _label_oferta(self, oferta_id: object) -> str:
+        oid = str(oferta_id or "")
+        o = self._offer_index.get(oid) or {}
+        nome = o.get("name") or o.get("nome") or o.get("title")
+        return (nome or oid or "?").strip()
+
+    def _format_assinaturas(self, r: Mapping[str, Any]) -> str:
+        raw = (
+            r.get("assinaturas")
+            or (r.get("cupom") or {}).get("assinaturas")
+            or (r.get("oferta") or {}).get("assinaturas")
+            or []
+        )
+        if isinstance(raw, str):
+            raw = [raw]
+
+        def pretty(s: str) -> str:
+            if not s:
+                return ""
+            t = str(s).strip()
+            t = re.sub(r"\s*\(.*?\)\s*", "", t, flags=re.I)
+            t = re.sub(r"^\s*assinatura\s+", "", t, flags=re.I)
+            t = re.split(r"\s*[\u2013\u2014-]\s*", t)[0].strip()
+            m = re.search(r"(\d+)\s*anos?", t, flags=re.I)
+            if m:
+                return f"{int(m.group(1))} anos"
+            if re.search(r"\banual\b", t, flags=re.I):
+                return "Anual"
+            if re.search(r"\bbimestral\b", t, flags=re.I):
+                return "Bimestral"
+            if re.search(r"\bmensal\b", t, flags=re.I):
+                return "Mensal"
+            return t.title()
+
+        vistos, out = set(), []
+        for item in raw:
+            ptxt = pretty(str(item))
+            k = ptxt.lower()
+            if ptxt and k not in vistos:
+                vistos.add(k)
+                out.append(ptxt)
+        return ", ".join(out)
+
+    @staticmethod
+    def _tipo_acao(a: dict[str, Any] | None) -> str:
+        return (a or {}).get("type") or (a or {}).get("acao") or ""
+
+    def _coletar_brindes(self, action: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not action:
+            return []
+        keys = ["brindes", "gifts", "add_items", "add", "extras", "itens", "items"]
+        val = next((action.get(k) for k in keys if action.get(k) is not None), None)
+        if val is None:
+            return []
+        if isinstance(val, dict):
+            val = [val]
+        itens: list[dict[str, Any]] = []
+        for g in val:
+            if isinstance(g, str):
+                itens.append({"nome": g.strip(), "qtd": 1})
+            elif isinstance(g, dict):
+                qtd = g.get("qtd") or g.get("qty") or g.get("quantidade") or 1
+                pid = g.get("produto_id")
+                nome = (
+                    (g.get("nome") or "").strip()
+                    or (self._label_produto(str(pid)) if pid is not None else "").strip()
+                    or (g.get("sku") or "").strip()
+                    or "?"
+                )
+                itens.append({"nome": nome, "qtd": int(qtd)})
+
+        agg: OrderedDict[str, int] = OrderedDict()
+        for it in itens:
+            agg[it["nome"]] = agg.get(it["nome"], 0) + it["qtd"]
+        return [{"nome": k, "qtd": v} for k, v in agg.items()]
+
+    @staticmethod
+    def _pegar_box(action: dict[str, Any] | None) -> str:
+        if not action:
+            return ""
+        for k in ["novo_box", "box", "replace_box", "swap_box", "box_name"]:
+            if action.get(k):
+                return str(action[k]).strip()
+        return ""
+
+    # ---------- view models para a UI ----------
+    def build_table_models(self) -> dict[str, Any]:
+        """Retorna linhas prontas para preencher as tabelas e os mapas (sem PyQt)."""
+        self.build_indices()
+
+        coupons_rows: list[tuple[str, str, str, str]] = []
+        offers_rows: list[tuple[str, str]] = []
+        map_coupons: list[int] = []
+        map_offers: list[int] = []
+
+        for i, r in enumerate(self.estado["rules"]):
+            a = r.get("action") or {}
+            if r.get("applies_to") == "cupom":
+                cupom = ((r.get("cupom") or {}).get("nome") or "").strip() or "—"
+                tipo = self._tipo_acao(a) or "—"
+                if tipo == "adicionar_brindes":
+                    brindes = self._coletar_brindes(a)
+                    box_ou_brindes = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes) or "—"
+                else:
+                    box_ou_brindes = self._pegar_box(a) or "—"
+                plano = self._format_assinaturas(r) or "—"
+                coupons_rows.append((cupom, tipo, box_ou_brindes, plano))
+                map_coupons.append(i)
+            else:
+                of = r.get("oferta") or {}
+                nome = (of.get("nome") or self._label_oferta(of.get("oferta_id")) or "—").strip()
+                brinde = ""
+                if self._tipo_acao(a) == "adicionar_brindes":
+                    brindes = self._coletar_brindes(a)
+                    brinde = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes) or "—"
+                offers_rows.append((nome, brinde or "—"))
+                map_offers.append(i)
+
+        return {
+            "coupons_rows": coupons_rows,
+            "offers_rows": offers_rows,
+            "map_coupons": map_coupons,
+            "map_offers": map_offers,
+        }
+
+    # ---------- mutações (comportamento) ----------
+    def add_rule(self, regra: dict[str, Any]) -> None:
+        self.estado["rules"].append(regra)
+
+    def replace_rule(self, idx: int, regra: dict[str, Any]) -> None:
+        self.estado["rules"][idx] = regra
+
+    def duplicate_rule(self, idx: int) -> int:
+        r = json.loads(json.dumps(self.estado["rules"][idx]))  # deep copy
+        r["id"] = gerar_uuid()
+        self.estado["rules"].insert(idx + 1, r)
+        return idx + 1
+
+    def delete_rule(self, idx: int) -> None:
+        del self.estado["rules"][idx]
+
+    def move_relative_in_group(self, idx_global: int, delta: int) -> int | None:
+        if not -1 <= delta <= 1 or delta == 0:
+            return None
+        rules = self.estado["rules"]
+        if not 0 <= idx_global < len(rules):
+            return None
+        group = rules[idx_global].get("applies_to") or "oferta"
+        j = idx_global + delta
+        while 0 <= j < len(rules) and (rules[j].get("applies_to") or "oferta") != group:
+            j += delta
+        if 0 <= j < len(rules):
+            rules[idx_global], rules[j] = rules[j], rules[idx_global]
+            return j
+        return None
+
+    def save(self) -> None:
+        salvar_regras(self.config_path, self.estado["rules"])
+
+
+# ----------------------------- UI / DIALOG -----------------------------
+
+
+class RuleManagerDialog(QDialog):
+    def __init__(
+        self, parent: QWidget | None, estado: MutableMapping[str, Any], skus_info: Any, config_path: str
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("⚖️ Regras (oferta/cupom)")
+        self.setMinimumSize(900, 600)
+
+        # backend injeta estado + serviços
+        self.backend = RulesManager(estado, skus_info, config_path)
+
+        layout = QVBoxLayout(self)
+
+        # Tabs
+        self.tabs = QTabWidget(self)
+        layout.addWidget(self.tabs)
+
+        # --- Cupons
+        self.tab_cupons = QWidget(self)
+        v_cupons = QVBoxLayout(self.tab_cupons)
+        self.tbl_cupons = QTableWidget(self.tab_cupons)
+        self.tbl_cupons.setColumnCount(4)
+        self.tbl_cupons.setHorizontalHeaderLabels(["Cupom", "Tipo de ação", "Box/Brindes", "Plano"])
+        self.tbl_cupons.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_cupons.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_cupons.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_cupons.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        v_cupons.addWidget(self.tbl_cupons)
+        self.tabs.addTab(self.tab_cupons, "Cupons")
+
+        # --- Ofertas
+        self.tab_ofertas = QWidget(self)
+        v_ofertas = QVBoxLayout(self.tab_ofertas)
+        self.tbl_ofertas = QTableWidget(self.tab_ofertas)
+        self.tbl_ofertas.setColumnCount(2)
+        self.tbl_ofertas.setHorizontalHeaderLabels(["Nome da oferta", "Brinde"])
+        self.tbl_ofertas.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tbl_ofertas.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_ofertas.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_ofertas.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        v_ofertas.addWidget(self.tbl_ofertas)
+        self.tabs.addTab(self.tab_ofertas, "Ofertas")
+
+        # Botões
+        linha_btns = QHBoxLayout()
+        self.btn_add = QPushButton("+ Adicionar")
+        self.btn_edit = QPushButton("✏️ Editar")
+        self.btn_dup = QPushButton("📄 Duplicar")
+        self.btn_del = QPushButton("🗑️ Remover")
+        self.btn_up = QPushButton("⬆️ Subir")
+        self.btn_down = QPushButton("⬇️ Descer")
+        self.btn_salvar = QPushButton("💾 Salvar")
+        for b in (self.btn_add, self.btn_edit, self.btn_dup, self.btn_del, self.btn_up, self.btn_down, self.btn_salvar):
+            linha_btns.addWidget(b) if b not in (self.btn_up, self.btn_down, self.btn_salvar) else None
+        linha_btns.addStretch(1)
+        linha_btns.addWidget(self.btn_up)
+        linha_btns.addWidget(self.btn_down)
+        linha_btns.addWidget(self.btn_salvar)
+        layout.addLayout(linha_btns)
+
+        # mapas (linha -> índice global)
+        self._map_cupons: list[int] = []
+        self._map_ofertas: list[int] = []
+
+        # sinais
+        self.btn_add.clicked.connect(self._add)
+        self.btn_edit.clicked.connect(self._edit)
+        self.btn_dup.clicked.connect(self._dup)
+        self.btn_del.clicked.connect(self._del)
+        self.btn_up.clicked.connect(self._up)
+        self.btn_down.clicked.connect(self._down)
+        self.btn_salvar.clicked.connect(self._salvar)
+
+        self._refresh_tables()
+
+    # ---------- UI-only ----------
+    def _refresh_tables(self) -> None:
+        vm = self.backend.build_table_models()
+
+        self.tbl_cupons.setRowCount(0)
+        for row_idx, (cupom, tipo, box_ou_brindes, plano) in enumerate(vm["coupons_rows"]):
+            self.tbl_cupons.insertRow(row_idx)
+            self.tbl_cupons.setItem(row_idx, 0, QTableWidgetItem(cupom))
+            self.tbl_cupons.setItem(row_idx, 1, QTableWidgetItem(tipo))
+            self.tbl_cupons.setItem(row_idx, 2, QTableWidgetItem(box_ou_brindes))
+            self.tbl_cupons.setItem(row_idx, 3, QTableWidgetItem(plano))
+
+        self.tbl_ofertas.setRowCount(0)
+        for row_idx, (nome, brinde) in enumerate(vm["offers_rows"]):
+            self.tbl_ofertas.insertRow(row_idx)
+            self.tbl_ofertas.setItem(row_idx, 0, QTableWidgetItem(nome))
+            self.tbl_ofertas.setItem(row_idx, 1, QTableWidgetItem(brinde))
+
+        self._map_cupons = vm["map_coupons"]
+        self._map_ofertas = vm["map_offers"]
+
+    def _current_table_and_map(self) -> tuple[QTableWidget, list[int]]:
+        if self.tabs.currentWidget() is self.tab_cupons:
+            return self.tbl_cupons, self._map_cupons
+        return self.tbl_ofertas, self._map_ofertas
+
+    def _selected_index(self) -> int | None:
+        table, idx_map = self._current_table_and_map()
+        row = table.currentRow()
+        if row < 0 or row >= len(idx_map):
+            return None
+        return idx_map[row]
+
+    # ---------- handlers chamando o backend ----------
+    def _add(self) -> None:
+        dlg = RuleEditorDialog(
+            self, self.backend.skus_info, regra=None, produtos_guru=self.backend.estado.get("produtos_guru")
+        )
+        if dlg.exec_() == QDialog.Accepted:
+            self.backend.add_rule(dlg.get_regra())
+            self._refresh_tables()
+
+    def _edit(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        regra = self.backend.estado["rules"][idx]
+        dlg = RuleEditorDialog(
+            self, self.backend.skus_info, regra=regra, produtos_guru=self.backend.estado.get("produtos_guru")
+        )
+        if dlg.exec_() == QDialog.Accepted:
+            self.backend.replace_rule(idx, dlg.get_regra())
+            self._refresh_tables()
+            self._reselect(idx)
+
+    def _dup(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        novo = self.backend.duplicate_rule(idx)
+        self._refresh_tables()
+        self._reselect(novo)
+
+    def _del(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        if (
+            QMessageBox.question(self, "Confirmar", "Excluir esta regra?", QMessageBox.Yes | QMessageBox.No)
+            == QMessageBox.Yes
+        ):
+            self.backend.delete_rule(idx)
+            self._refresh_tables()
+
+    def _up(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        j = self.backend.move_relative_in_group(idx, -1)
+        if j is not None:
+            self._refresh_tables()
+            self._reselect(j)
+
+    def _down(self) -> None:
+        idx = self._selected_index()
+        if idx is None:
+            return
+        j = self.backend.move_relative_in_group(idx, +1)
+        if j is not None:
+            self._refresh_tables()
+            self._reselect(j)
+
+    def _salvar(self) -> None:
+        try:
+            self.backend.save()
+            QMessageBox.information(self, "Salvo", "Regras salvas em config_ofertas.json.")
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao salvar: {e}")
+
+    def _reselect(self, idx_global: int) -> None:
+        r = self.backend.estado["rules"][idx_global]
+        if r.get("applies_to") == "cupom":
+            for row, gi in enumerate(self._map_cupons):
+                if gi == idx_global:
+                    self.tabs.setCurrentWidget(self.tab_cupons)
+                    self.tbl_cupons.setCurrentCell(row, 0)
+                    return
+        else:
+            for row, gi in enumerate(self._map_ofertas):
+                if gi == idx_global:
+                    self.tabs.setCurrentWidget(self.tab_ofertas)
+                    self.tbl_ofertas.setCurrentCell(row, 0)
+                    return
+
+
+############################################
+# Função para abrir o gerenciador (wire)
+############################################
+
+# ----------------------------- BACKEND / MAPEADOR GURU -----------------------------
+
+
+class GuruCatalogService:
+    """Serviço de catálogo do Guru (produtos + ofertas)."""
+
+    def __init__(self, *, base_url: str, headers: dict[str, str], http_get: Callable[..., Any]) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.headers = headers
+        self.http_get = http_get
+
+    def buscar_todos_produtos(self) -> list[dict[str, Any]]:
+        url = f"{self.base_url}/products"
+        produtos: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            params: dict[str, Any] = {"limit": 100}
+            if cursor:
+                params["cursor"] = cursor
+            r = self.http_get(url, headers=self.headers, params=params, timeout=10)
+            if r.status_code != 200:
+                print(f"[❌ Guru] Erro {r.status_code} ao buscar produtos: {r.text}")
+                break
+            data: dict[str, Any] = r.json()
+            produtos += data.get("data", [])
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+        return produtos
+
+    def buscar_ofertas_do_produto(self, product_id: str) -> list[dict[str, Any]]:
+        url = f"{self.base_url}/products/{product_id}/offers"
+        ofertas: list[dict[str, Any]] = []
+        cursor: str | None = None
+        pagina = 1
+
+        while True:
+            try:
+                params: dict[str, Any] = {"limit": 100}
+                if cursor:
+                    params["cursor"] = cursor
+
+                r = self.http_get(url, headers=self.headers, params=params, timeout=10)
+                if r.status_code != 200:
+                    print(f"[❌ Guru] Erro {r.status_code} ao buscar ofertas do produto {product_id}: {r.text}")
+                    break
+
+                data: dict[str, Any] = r.json()
+                pagina_dados: list[dict[str, Any]] = data.get("data", [])
+                print(f"[📄 Página {pagina}] {len(pagina_dados)} ofertas encontradas para produto {product_id}")
+
+                ofertas += pagina_dados
+                cursor = data.get("next_cursor")
+
+                if not cursor:
+                    break
+
+                pagina += 1
+
+            except Exception as e:
+                print(f"[❌ Guru] Exceção ao buscar ofertas do produto {product_id}: {e}")
+                break
+
+        print(f"[✅ Guru] Total de ofertas carregadas para o produto {product_id}: {len(ofertas)}")
+        return ofertas
+
+
+# ----------------------------- UI / WIRE -----------------------------
+
+
+def abrir_mapeador_regras(
+    estado: MutableMapping[str, Any],
+    skus_info: Any,
+) -> None:
+    """Camada de UI: injeta serviço e abre o diálogo."""
+    config_path = os.path.join(os.path.dirname(__file__), "config_ofertas.json")
+
+    # injeta backend
+    catalog = GuruCatalogService(base_url=BASE_URL_GURU, headers=HEADERS_GURU, http_get=http_get)
+
+    try:
+        estado["produtos_guru"] = catalog.buscar_todos_produtos()
+    except Exception:
+        estado["produtos_guru"] = []
+
+    dlg = RuleManagerDialog(None, estado, skus_info, config_path)
+    dlg.exec_()
+
+
+# ----------------------------- BACKEND / VARIAVEIS GLOBAIS ASSINATURAS -----------------------------
+
+ASSINATURAS, GURU_META = obter_ids_assinaturas_por_duracao(skus_info)
+
+ASSINATURAS_MENSAIS = ASSINATURAS.get("mensal", [])
+ASSINATURAS_BIMESTRAIS = ASSINATURAS.get("bimestral", [])
+ASSINATURAS_ANUAIS = ASSINATURAS.get("anual", [])
+ASSINATURAS_BIANUAIS = ASSINATURAS.get("bianual", [])
+ASSINATURAS_TRIANUAIS = ASSINATURAS.get("trianual", [])
+
+# ----------------------------- BACKEND / WORKER THREAD -----------------------------
+
+
+class DummyCancelador:
+    def is_set(self) -> bool:
+        return False
+
+
+def consolidar_transacoes(
+    *,
+    dados: Mapping[str, Any],
+    estado: MutableMapping[str, Any],
+    skus_info: Any,
+    atualizar: Callable[[str, int, int], None],  # callback de progresso
+    cancelado: Callable[[], bool],  # consulta cancelamento
+    logger: logging.Logger,
+) -> tuple[list[Any], dict[str, Any], list[str]]:
+    """Executa o fluxo de exportação. Sem PyQt, sem threads aqui.
+    Retorna (novas_linhas, contagem, transacoes_com_erro)."""
+
+    logger.info("worker_started", extra={"modo": dados.get("modo")})
+
+    # cancelador opcional vindo do estado (já existe HasIsSet)
+    _cancel_event = cast(HasIsSet, estado.get("cancelador_global") or DummyCancelador())
+    if callable(cancelado) and cancelado():
+        logger.warning("worker_cancelled_early")
+        return [], {}, []
+
+    modo: str = str(dados.get("modo") or "assinaturas").strip().lower()
+
+    # Busca (ramo por modo)
+    if modo == "assinaturas":
+        atualizar("🔄 Buscando transações de assinaturas...", 0, 0)
+        transacoes_raw, _unused, dados_final_map_raw = buscar_transacoes_assinaturas(
+            dict(dados), atualizar=atualizar, cancelador=_cancel_event, estado=dict(estado)
+        )
+    elif modo == "produtos":
+        atualizar("🔄 Buscando transações de produtos...", 0, 0)
+        transacoes_raw, _unused, dados_final_map_raw = buscar_transacoes_produtos(
+            dict(dados), atualizar=atualizar, cancelador=_cancel_event, estado=dict(estado)
+        )
+    else:
+        raise ValueError(f"Modo de busca desconhecido: {modo}")
+
+    if cancelado():
+        logger.warning("worker_cancelled_after_fetch")
+        return [], {}, []
+
+    # Normalizações mínimas
+    dados_final_map = cast(Mapping[str, Any], dados_final_map_raw)
+    if not isinstance(dados_final_map, Mapping):
+        raise ValueError("Dados inválidos retornados da busca.")
+    dados_final: dict[str, Any] = dict(dados_final_map)
+
+    transacoes = cast(list[Any], transacoes_raw)
+    if not isinstance(transacoes, list):
+        raise ValueError("Transações retornadas em formato inválido.")
+
+    logger.info("worker_received_transactions", extra={"qtd": len(transacoes), "modo": modo})
+    atualizar("📦 Processando transações", 0, 100)
+
+    # Processamento
+    novas_linhas, contagem_map = processar_planilha(
+        transacoes=transacoes,
+        dados=dados_final,
+        atualizar_etapa=atualizar,
+        skus_info=skus_info,
+        cancelador=_cancel_event,  # HasIsSet | None
+        estado=dict(estado),
+    )
+    if not isinstance(contagem_map, Mapping):
+        raise ValueError("Retorno inválido de processar_planilha (esperado Mapping).")
+    contagem: dict[str, Any] = dict(cast(Mapping[str, Any], contagem_map))
+
+    if cancelado():
+        logger.warning("worker_cancelled_after_process")
+        return [], {}, []
+
+    atualizar("✅ Finalizando...", 100, 100)
+
+    # erros acumulados no estado (se existirem) -> garantir list[str]
+    erros_raw = estado.get("transacoes_com_erro", [])
+    transacoes_com_erro: list[str] = [x for x in erros_raw if isinstance(x, str)]
+
+    logger.info("worker_success", extra={"linhas_adicionadas": len(novas_linhas)})
+    return novas_linhas, contagem, transacoes_com_erro
+
+
+# ----------------------------- UI / WORKER THREAD -----------------------------
 
 
 class WorkerController(QObject):
@@ -1654,6 +1910,10 @@ class WorkerController(QObject):
         self.dados: Mapping[str, Any] = dados
         self.estado: MutableMapping[str, Any] = estado
         self.skus_info: Any = skus_info
+
+        # ➜ define o atributo para o mypy
+        self._timer: QTimer | None = None
+
         self.iniciar_worker_signal.connect(self.iniciar_worker)
 
     def iniciar_worker(self) -> None:
@@ -1698,7 +1958,8 @@ class WorkerController(QObject):
                     )
                 finally:
                     with suppress(Exception):
-                        self._timer.stop()
+                        if self._timer is not None:
+                            self._timer.stop()
 
             worker.finalizado.connect(ao_finalizar_worker)
 
@@ -1716,29 +1977,27 @@ class WorkerController(QObject):
 
 
 class WorkerThread(QThread):
-    # sinais esperados pelo Controller
     finalizado = pyqtSignal(list, dict)
     erro = pyqtSignal(str)
     avisar_usuario = pyqtSignal(str, str)
 
-    # sinais para progresso/fechamento seguro entre threads
     progresso = pyqtSignal(str, int, int)
     fechar_ui = pyqtSignal()
 
     def __init__(
         self,
-        dados: Mapping[str, Any],  # aceita qualquer mapeamento (sem cópia)
-        estado: MutableMapping[str, Any],  # mutável (dict-like)
+        dados: Mapping[str, Any],
+        estado: MutableMapping[str, Any],
         skus_info: Any,
         gerenciador: GerenciadorProgresso,
     ) -> None:
         super().__init__()
-        self.dados: Mapping[str, Any] = dados
-        self.estado: MutableMapping[str, Any] = estado
-        self.skus_info: Any = skus_info
-        self.gerenciador: GerenciadorProgresso = gerenciador
+        self.dados = dados
+        self.estado = estado
+        self.skus_info = skus_info
+        self.gerenciador = gerenciador
 
-        # Mantém Qt.QueuedConnection, mas silencia o stub do PyQt para mypy
+        # mantém as conexões por sinal (UI thread-safe)
         self.progresso.connect(self.gerenciador.atualizar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
         self.fechar_ui.connect(self.gerenciador.fechar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
 
@@ -1746,103 +2005,34 @@ class WorkerThread(QThread):
 
     def run(self) -> None:
         set_correlation_id(self._parent_correlation_id)
-
-        novas_linhas: list[Any] = []
-        contagem: dict[str, Any] = {}
-
         try:
             logger.info("worker_started", extra={"modo": self.dados.get("modo")})
 
-            # tipagem apenas: Optional[Event] + union-attr ignore
-            cancelador: Event | None = cast(Event | None, self.estado.get("cancelador_global"))
-            if hasattr(cancelador, "is_set") and cancelador.is_set():  # type: ignore[union-attr]
-                logger.warning("worker_cancelled_early")
-                return
+            # callbacks puros para o backend
+            def atualizar_cb(txt: str, a: int, b: int) -> None:
+                self.progresso.emit(txt, a, b)
 
-            modo = (cast(str, self.dados.get("modo") or "assinaturas")).strip().lower()
+            def cancelado_cb() -> bool:
+                ev = self.estado.get("cancelador_global")
+                return ev.is_set() if isinstance(ev, Event) else False
 
-            # buscamos em ramos separados, mas NÃO atribuimos a dados_final ainda
-            if modo == "assinaturas":
-                self.progresso.emit("🔄 Buscando transações de assinaturas...", 0, 0)
-                transacoes, _, dados_final_map = buscar_transacoes_assinaturas(
-                    cast(dict[str, Any], self.dados),  # tipagem
-                    atualizar=self.progresso.emit,
-                    cancelador=cast(Event, self.estado["cancelador_global"]),  # tipagem
-                    estado=cast(dict[str, Any], self.estado),  # tipagem
-                )
-
-            elif modo == "produtos":
-                self.progresso.emit("🔄 Buscando transações de produtos...", 0, 0)
-                transacoes, _, dados_final_map = buscar_transacoes_produtos(
-                    cast(dict[str, Any], self.dados),
-                    atualizar=self.progresso.emit,
-                    cancelador=cast(Event, self.estado["cancelador_global"]),
-                    estado=cast(dict[str, Any], self.estado),
-                )
-
-            else:
-                raise ValueError(f"Modo de busca desconhecido: {modo}")
-
-            # Unificação de tipo: Mapping -> dict UMA única vez
-            if not isinstance(dados_final_map, Mapping):
-                raise ValueError("Dados inválidos retornados da busca.")
-            dados_final: dict[str, Any] = dict(dados_final_map)
-
-            if cast(Event, self.estado["cancelador_global"]).is_set():
-                logger.warning("worker_cancelled_after_fetch")
-                return
-
-            self.progresso.emit("📦 Processando transações", 0, 100)
-
-            if not isinstance(transacoes, list) or not isinstance(dados_final, dict):
-                raise ValueError("Dados inválidos retornados da busca.")
-
-            logger.info(
-                "worker_received_transactions",
-                extra={"qtd": len(transacoes), "modo": modo},
-            )
-
-            # processar_planilha pode devolver Mapping; usamos var intermediária
-            novas_linhas, contagem_map = processar_planilha(
-                transacoes=transacoes,
-                dados=dados_final,
-                atualizar_etapa=self.progresso.emit,
+            novas_linhas, contagem, erros = consolidar_transacoes(
+                dados=self.dados,
+                estado=self.estado,
                 skus_info=self.skus_info,
-                cancelador=cast(Event, self.estado["cancelador_global"]),
-                estado=cast(dict[str, Any], self.estado),
+                atualizar=atualizar_cb,
+                cancelado=cancelado_cb,
+                logger=logger,
             )
 
-            if not isinstance(contagem_map, Mapping):
-                raise ValueError("Retorno inválido de processar_planilha (esperado Mapping).")
-            contagem = dict(contagem_map)  # Mapping -> dict (sem reanotar)
-
-            if cast(Event, self.estado["cancelador_global"]).is_set():
-                logger.warning("worker_cancelled_after_process")
-                return
-
-            self.progresso.emit("✅ Finalizando...", 100, 100)
-
-            if not isinstance(novas_linhas, list) or not isinstance(contagem, dict):
-                raise ValueError("Retorno inválido de processar_planilha.")
-
+            # Atualiza estado (único ponto que toca estado mutável da UI)
             if "linhas_planilha" not in self.estado or not isinstance(self.estado["linhas_planilha"], list):
                 self.estado["linhas_planilha"] = []
             self.estado["linhas_planilha"].extend(novas_linhas)
             self.estado["transacoes_obtidas"] = True
 
-            logger.info("worker_success", extra={"linhas_adicionadas": len(novas_linhas)})
-
-        except Exception as e:
-            logger.exception("worker_error", extra={"err": str(e)})
-            self.erro.emit(str(e))
-
-        finally:
-            logger.info("worker_finished")
-            self.progresso.emit("✅ Finalizado com sucesso", 1, 1)
-            self.fechar_ui.emit()
-
-            erros = self.estado.get("transacoes_com_erro", [])
-            if isinstance(erros, list) and erros:
+            # Aviso de erros (se houver)
+            if erros:
                 mensagem = (
                     f"{len(erros)} transações apresentaram erro durante o processo.\n"
                     "Elas foram ignoradas e não estão na planilha.\n\n"
@@ -1854,42 +2044,47 @@ class WorkerThread(QThread):
 
             self.finalizado.emit(novas_linhas, contagem)
 
+        except Exception as e:
+            logger.exception("worker_error", extra={"err": str(e)})
+            self.erro.emit(str(e))
+
+        finally:
+            logger.info("worker_finished")
+            self.progresso.emit("✅ Finalizado com sucesso", 1, 1)
+            self.fechar_ui.emit()
+
+
+# ----------------------------- BACKEND / BUSCA DE PRODUTOS -----------------------------
+
 
 def dividir_busca_em_periodos(
     data_inicio: str | date | datetime,
     data_fim: str | date | datetime,
 ) -> list[tuple[str, str]]:
-    """Divide o intervalo em blocos com fins em abr/ago/dez.
-
-    Retorna lista de tuplas (YYYY-MM-DD, YYYY-MM-DD). Internamente usa datetime aware (UTC).
-    """
-
     ini = _as_dt(data_inicio)
     if not ini.tzinfo:
         ini = ini.replace(tzinfo=UTC)
+    ini = ini.replace(hour=0, minute=0, second=0, microsecond=0)
+
     end = _as_dt(data_fim)
     if not end.tzinfo:
         end = end.replace(tzinfo=UTC)
+    end = end.replace(hour=23, minute=59, second=59, microsecond=0)
+
+    if ini > end:
+        return []
 
     blocos: list[tuple[str, str]] = []
     atual = ini
-
     while atual <= end:
         ano = atual.year
         mes = atual.month
-
-        # Blocos: jan-abr, mai-ago, set-dez
         fim_mes = 4 if mes <= 4 else (8 if mes <= 8 else 12)
-
         ultimo_dia = monthrange(ano, fim_mes)[1]
         fim_bloco = datetime(ano, fim_mes, ultimo_dia, 23, 59, 59, tzinfo=UTC)
-
-        if fim_bloco > end:
-            fim_bloco = end
-
+        fim_bloco = min(fim_bloco, end)
         blocos.append((atual.date().isoformat(), fim_bloco.date().isoformat()))
 
-        # avança para o próximo bloco
         proximo_mes = fim_mes + 1
         proximo_ano = ano
         if proximo_mes > 12:
@@ -1900,7 +2095,197 @@ def dividir_busca_em_periodos(
     return blocos
 
 
-def iniciar_busca_produtos(
+def executar_busca_produtos(
+    *,
+    data_ini: str,
+    data_fim: str,
+    nome_produto: str | None,
+    box_nome: str | None,
+    transportadoras_sel: Mapping[str, bool],
+    estado: MutableMapping[str, Any],
+    skus_info: Mapping[str, Mapping[str, Any]],
+) -> None:
+    print(f"[🔎] Iniciando busca de produtos de {data_ini} a {data_fim}")
+    produtos_alvo: dict[str, Mapping[str, Any]] = {}
+
+    # 🎯 Seleciona produtos válidos (somente não-assinatura)
+    if nome_produto:
+        info = skus_info.get(nome_produto, {})
+        if info.get("tipo") == "assinatura":
+            # Sem UI aqui: sinalize pelo estado (a UI decide como exibir)
+            estado.setdefault("mensagens", []).append(
+                {
+                    "tipo": "erro",
+                    "titulo": "Erro",
+                    "texto": f"'{nome_produto}' é uma assinatura. Selecione apenas produtos.",
+                }
+            )
+            return
+        produtos_alvo[nome_produto] = info
+    else:
+        produtos_alvo = {nome: info for nome, info in skus_info.items() if info.get("tipo") != "assinatura"}
+
+    produtos_ids: list[str] = []
+    for info in produtos_alvo.values():
+        gids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
+        for gid in gids:
+            s = str(gid).strip()
+            if s:
+                produtos_ids.append(s)
+
+    if not produtos_ids:
+        estado.setdefault("mensagens", []).append(
+            {
+                "tipo": "aviso",
+                "titulo": "Aviso",
+                "texto": "Nenhum produto com IDs válidos encontrados.",
+            }
+        )
+        return
+
+    dados: dict[str, Any] = {
+        "modo": "produtos",
+        "inicio": data_ini,
+        "fim": data_fim,
+        "produtos_ids": produtos_ids,
+        "box_nome": (box_nome or "").strip(),
+        "transportadoras_permitidas": [nome for nome, marcado in transportadoras_sel.items() if marcado],
+    }
+
+    wt = estado.get("worker_thread")
+    if wt is not None and hasattr(wt, "isRunning") and wt.isRunning():
+        print("[⚠️] Uma execução já está em andamento.")
+        return
+
+    # estruturas no estado
+    estado.setdefault("etapas_finalizadas", {})
+    estado.setdefault("df_planilha_parcial", pd.DataFrame())
+    estado.setdefault("brindes_indisp_set", set())
+    estado.setdefault("embutidos_indisp_set", set())
+    estado.setdefault("linhas_planilha", [])
+    estado.setdefault("mapa_transaction_id_por_linha", {})
+
+    if not isinstance(estado.get("cancelador_global"), threading.Event):
+        estado["cancelador_global"] = threading.Event()
+    estado["cancelador_global"].clear()
+
+    estado["dados_busca"] = dict(dados)
+
+    print("[🚀 executar_busca_produtos] Enviando para WorkerController...")
+
+    try:
+        controller = WorkerController(dados, estado, skus_info)  # classe já existente
+        estado["worker_controller"] = controller
+        controller.iniciar_worker_signal.emit()
+    except Exception as e:
+        print("[❌ ERRO EM iniciar_worker via sinal]:", e)
+        print(traceback.format_exc())
+        # Sem UI direta: notifique via comunicador (se houver) e registre em estado
+        estado.setdefault("mensagens", []).append(
+            {
+                "tipo": "erro",
+                "titulo": "Erro",
+                "texto": f"Ocorreu um erro ao iniciar o processo: {e!s}",
+            }
+        )
+        try:
+            comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Ocorreu um erro ao iniciar o processo:\n{e!s}")
+        except Exception:
+            pass
+
+
+def buscar_transacoes_produtos(
+    dados: Mapping[str, Any],
+    *,
+    atualizar: Callable[[str, int, int], Any] | None = None,
+    cancelador: HasIsSet | None = None,
+    estado: MutableMapping[str, Any] | None = None,
+    logger: Any | None = None,  # <- opcional: injete seu logger
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    """
+    BACKEND: coleta transações de produtos em paralelo para os períodos de dividir_busca_em_periodos.
+    Retorna: (transacoes, extras_dict, eco_de_dados_dict)
+    """
+    log = logger or type("PrintLogger", (), {"info": print, "warning": print, "error": print, "exception": print})()
+
+    log.info("[🔍 buscar_transacoes_produtos] Início da função")
+
+    transacoes: list[dict[str, Any]] = []
+    if estado is None:
+        estado = {}
+    estado["transacoes_com_erro"] = []
+
+    inicio = dados["inicio"]
+    fim = dados["fim"]
+    produtos_ids: list[str] = [str(pid) for pid in (dados.get("produtos_ids") or []) if pid]
+
+    if not produtos_ids:
+        log.warning("[⚠️] Nenhum produto selecionado para busca.")
+        return [], {}, dict(dados)
+
+    intervalos = cast(list[tuple[str, str]], dividir_busca_em_periodos(inicio, fim))
+    tarefas: list[tuple[str, str, str]] = [
+        (product_id, ini, f) for product_id in produtos_ids for (ini, f) in intervalos
+    ]
+
+    log.info(f"[📦] Total de tarefas para produtos: {len(tarefas)}")
+
+    if cancelador and cancelador.is_set():
+        if atualizar:
+            atualizar("⛔ Busca cancelada pelo usuário", 1, 1)
+        return [], {}, dict(dados)
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(buscar_transacoes_com_retry, *args, cancelador=cancelador) for args in tarefas]
+        total_futures = len(futures)
+        concluidos = 0
+
+        while futures:
+            if cancelador and cancelador.is_set():
+                log.warning("[🚫] Cancelado durante busca de produtos.")
+                for f in futures:
+                    f.cancel()
+                return transacoes, {}, dict(dados)
+
+            done, not_done = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
+
+            for future in done:
+                try:
+                    resultado = future.result()
+                    if isinstance(resultado, list):
+                        for item in resultado:
+                            if isinstance(item, dict):
+                                transacoes.append(item)
+                            elif isinstance(item, list):
+                                for subitem in item:
+                                    if isinstance(subitem, dict):
+                                        transacoes.append(subitem)
+                                    else:
+                                        log.warning(f"[⚠️] Ignorado item aninhado não-dict: {type(subitem)}")
+                            else:
+                                log.warning(f"[⚠️] Ignorado item inesperado: {type(item)}")
+                    else:
+                        log.warning(f"[⚠️] Resultado inesperado: {type(resultado)}")
+                except Exception as e:
+                    msg = f"Erro ao buscar transações de produto: {e!s}"
+                    log.exception(f"❌ {msg}")
+                    estado["transacoes_com_erro"].append(msg)
+
+                concluidos += 1
+                if atualizar:
+                    with suppress(Exception):
+                        atualizar("🔄 Coletando transações de produtos...", concluidos, total_futures)
+
+            futures = list(not_done)
+
+    log.info(f"[✅ buscar_transacoes_produtos] Finalizado - {len(transacoes)} transações coletadas")
+    return transacoes, {}, dict(dados)
+
+
+# ----------------------------- UI / DIALOG BUSCA PRODUTOS -----------------------------
+
+
+def abrir_dialogo_busca_produtos(
     box_nome_input: QComboBox,
     transportadoras_var: Mapping[str, QCheckBox],
     skus_info: Mapping[str, Mapping[str, Any]],
@@ -1980,7 +2365,7 @@ def iniciar_busca_produtos(
         data_ini_s = data_ini_py.isoformat()
         data_fim_s = data_fim_py.isoformat()
 
-        executar_busca_produtos(
+        acionar_busca_produtos(
             data_ini=data_ini_s,
             data_fim=data_fim_s,
             nome_produto=None if nome_produto == "Todos os produtos" else nome_produto,
@@ -1996,7 +2381,7 @@ def iniciar_busca_produtos(
     dialog.exec_()
 
 
-def executar_busca_produtos(
+def acionar_busca_produtos(  # NOVO wrapper UI
     data_ini: str,
     data_fim: str,
     nome_produto: str | None,
@@ -2005,148 +2390,17 @@ def executar_busca_produtos(
     estado: MutableMapping[str, Any],
     skus_info: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    print(f"[🔎] Iniciando busca de produtos de {data_ini} a {data_fim}")
-    produtos_alvo: dict[str, Mapping[str, Any]] = {}
-
-    # 🎯 Seleciona produtos válidos
-    if nome_produto:
-        info = skus_info.get(nome_produto, {})
-        if info.get("tipo") == "assinatura":
-            QMessageBox.warning(None, "Erro", f"'{nome_produto}' é uma assinatura. Selecione apenas produtos.")
-            return
-        produtos_alvo[nome_produto] = info
-    else:
-        produtos_alvo = {nome: info for nome, info in skus_info.items() if info.get("tipo") != "assinatura"}
-
-    produtos_ids: list[str] = []
-    for info in produtos_alvo.values():
-        gids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
-        for gid in gids:
-            s = str(gid).strip()
-            if s:
-                produtos_ids.append(s)
-
-    if not produtos_ids:
-        QMessageBox.warning(None, "Aviso", "Nenhum produto com IDs válidos encontrados.")
-        return
-
-    dados: dict[str, Any] = {
-        "modo": "produtos",  # ← ajuste mantido
-        "inicio": data_ini,
-        "fim": data_fim,
-        "produtos_ids": produtos_ids,
-        "box_nome": (box_nome_input.currentText() or "").strip(),
-        "transportadoras_permitidas": [nome for nome, cb in transportadoras_var.items() if cb.isChecked()],
-    }
-
-    wt = estado.get("worker_thread")
-    if wt is not None and hasattr(wt, "isRunning") and wt.isRunning():
-        print("[⚠️] Uma execução já está em andamento.")
-        return
-
-    estado.setdefault("etapas_finalizadas", {})
-    estado.setdefault("df_planilha_parcial", pd.DataFrame())
-    estado.setdefault("brindes_indisp_set", set())
-    estado.setdefault("embutidos_indisp_set", set())
-    estado.setdefault("linhas_planilha", [])
-    estado.setdefault("mapa_transaction_id_por_linha", {})
-
-    if not isinstance(estado.get("cancelador_global"), threading.Event):
-        estado["cancelador_global"] = threading.Event()
-
-    estado["cancelador_global"].clear()
-    estado["dados_busca"] = dict(dados)  # cópia simples
-
-    print("[🚀 executar_busca_produtos] Enviando para WorkerController...")
-
-    try:
-        controller = WorkerController(dados, estado, skus_info)  # tipos permanecem aceitos
-        estado["worker_controller"] = controller
-        controller.iniciar_worker_signal.emit()
-    except Exception as e:
-        print("[❌ ERRO EM iniciar_worker via sinal]:", e)
-        print(traceback.format_exc())
-        comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Ocorreu um erro ao iniciar a exportação:\n{e!s}")
-
-
-def buscar_transacoes_produtos(
-    dados: Mapping[str, Any],
-    *,
-    atualizar: Callable[[str, int, int], Any] | None = None,
-    cancelador: HasIsSet | None = None,
-    estado: MutableMapping[str, Any] | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:  # ← dict no 3º item
-    print("[🔍 buscar_transacoes_produtos] Início da função")
-
-    transacoes: list[dict[str, Any]] = []
-    if estado is None:
-        estado = {}
-    estado["transacoes_com_erro"] = []
-
-    inicio = dados["inicio"]
-    fim = dados["fim"]
-    produtos_ids: list[str] = [str(pid) for pid in (dados.get("produtos_ids") or []) if pid]
-
-    if not produtos_ids:
-        print("[⚠️] Nenhum produto selecionado para busca.")
-        return [], {}, dict(dados)  # ← CONVERTE
-
-    intervalos = cast(list[tuple[str, str]], dividir_busca_em_periodos(inicio, fim))
-    tarefas: list[tuple[str, str, str]] = [
-        (product_id, ini, fim) for product_id in produtos_ids for (ini, fim) in intervalos
-    ]
-
-    print(f"[📦] Total de tarefas para produtos: {len(tarefas)}")
-
-    if cancelador and cancelador.is_set():
-        if atualizar:
-            atualizar("⛔ Busca cancelada pelo usuário", 1, 1)
-        return [], {}, dict(dados)  # ← CONVERTE
-
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = [executor.submit(buscar_transacoes_com_retry, *args, cancelador=cancelador) for args in tarefas]
-        total_futures = len(futures)
-        concluidos = 0
-
-        while futures:
-            if cancelador and cancelador.is_set():
-                print("[🚫] Cancelado durante busca de produtos.")
-                for f in futures:
-                    f.cancel()
-                return transacoes, {}, dict(dados)  # ← CONVERTE
-
-            done, not_done = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
-
-            for future in done:
-                try:
-                    resultado = future.result()
-                    if isinstance(resultado, list):
-                        for item in resultado:
-                            if isinstance(item, dict):
-                                transacoes.append(item)
-                            elif isinstance(item, list):
-                                for subitem in item:
-                                    if isinstance(subitem, dict):
-                                        transacoes.append(subitem)
-                                    else:
-                                        print(f"[⚠️] Ignorado item aninhado não-dict: {type(subitem)}")
-                            else:
-                                print(f"[⚠️] Ignorado item inesperado: {type(item)}")
-                    else:
-                        print(f"[⚠️] Resultado inesperado: {type(resultado)}")
-                except Exception as e:
-                    erro_msg = f"Erro ao buscar transações de produto: {e!s}"
-                    print(f"❌ {erro_msg}")
-                    estado["transacoes_com_erro"].append(erro_msg)
-                concluidos += 1
-                if atualizar:
-                    with suppress(Exception):
-                        atualizar("🔄 Coletando transações de produtos...", concluidos, total_futures)
-
-            futures = list(not_done)
-
-    print(f"[✅ buscar_transacoes_produtos] Finalizado - {len(transacoes)} transações coletadas")
-    return transacoes, {}, dict(dados)
+    box_nome = (box_nome_input.currentText() or "").strip() or None
+    transportadoras_sel = {nome: cb.isChecked() for nome, cb in transportadoras_var.items()}
+    executar_busca_produtos(  # chama o BACKEND puro
+        data_ini=data_ini,
+        data_fim=data_fim,
+        nome_produto=nome_produto,
+        box_nome=box_nome,
+        transportadoras_sel=transportadoras_sel,
+        estado=estado,
+        skus_info=skus_info,
+    )
 
 
 def bimestre_do_mes(mes: int) -> int:
@@ -5260,6 +5514,46 @@ def salvar_em_excel_sem_duplicados(
 
 # Integração com a API da Shopify
 
+# ----------------------------- BACKEND / SHOPIFY ------------------------------
+
+# API SHOPIFY
+
+
+def obter_api_shopify_version(now: datetime | None = None) -> str:
+    """Retorna a versão trimestral da Shopify API (YYYY-01/04/07/10).
+
+    Usa datetime aware (UTC por padrão). 'now' é opcional (útil para testes).
+    """
+    dt = now or datetime.now(UTC)
+    y, m = dt.year, dt.month
+    q_start = ((m - 1) // 3) * 3 + 1  # 1, 4, 7, 10
+    return f"{y}-{q_start:02d}"
+
+
+API_VERSION = obter_api_shopify_version()
+GRAPHQL_URL = f"https://{settings.SHOP_URL}/admin/api/{API_VERSION}/graphql.json"
+
+
+class _DadosTemp(TypedDict, total=False):
+    cpfs: dict[str, Any]
+    bairros: dict[str, Any]
+    enderecos: dict[str, Any]
+
+
+# Inicializa/garante o tipo de estado["dados_temp"] apenas aqui
+dt = cast(_DadosTemp, estado.setdefault("dados_temp", {}))
+dt.setdefault("cpfs", {})
+dt.setdefault("bairros", {})
+dt.setdefault("enderecos", {})
+
+# Controle de taxa global
+controle_shopify = {"lock": threading.Lock(), "ultimo_acesso": time.time()}
+MIN_INTERVALO_GRAPHQL = 0.1  # 100ms (100 chamadas/s)
+
+# API OPENAI
+
+client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+
 
 def normalizar_transaction_id(valor: str | int) -> str:
     if isinstance(valor, str):
@@ -6909,7 +7203,10 @@ def endereco_parece_completo(address1: str) -> bool:
     return any(char.isdigit() for char in partes[1])
 
 
-def executar_fluxo_loja(estado: MutableMapping[str, Any]) -> None:
+# ------------------------ UI / FLUXO SHOPIFY ------------------------#
+
+
+def acionar_busca_pedidos_shopify(estado: MutableMapping[str, Any]) -> None:
     gerenciador: GerenciadorProgresso = GerenciadorProgresso(
         titulo="🔎 Buscando pedidos na Shopify",
         com_percentual=False,
@@ -6919,12 +7216,14 @@ def executar_fluxo_loja(estado: MutableMapping[str, Any]) -> None:
     estado["gerenciador_progresso"] = gerenciador
     gerenciador.atualizar("🔄 Buscando pedidos pagos na Shopify...", 0, 0)
 
+    # 🔹 Apenas leitura de UI aqui
     data_inicio: str = estado["entrada_data_inicio"].date().toString("dd/MM/yyyy")
     fulfillment_status: str = estado["combo_status"].currentText()
     produto_alvo: str | None = estado["combo_produto"].currentText() if estado["check_produto"].isChecked() else None
     skus_info: Mapping[str, Any] = estado["skus_info"]
 
-    iniciar_todas_as_buscas(
+    # 🔹 Delegação para backend
+    preparar_busca_pedidos_shopify(
         estado=estado,
         gerenciador=gerenciador,
         data_inicio_str=data_inicio,
@@ -6935,7 +7234,31 @@ def executar_fluxo_loja(estado: MutableMapping[str, Any]) -> None:
     )
 
 
-def iniciar_todas_as_buscas(
+# ------------------------ BACKEND / FLUXO SHOPIFY ------------------------#
+
+
+def preparar_busca_pedidos_shopify(
+    *,
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso,
+    data_inicio_str: str,
+    produto_alvo: str | None,
+    skus_info: Mapping[str, Any],
+    fulfillment_status: str,
+    depois: Callable[[], None],
+) -> None:
+    executar_busca_pedidos_shopify(
+        estado=estado,
+        gerenciador=gerenciador,
+        data_inicio_str=data_inicio_str,
+        produto_alvo=produto_alvo,
+        skus_info=skus_info,
+        fulfillment_status=fulfillment_status,
+        depois=depois,
+    )
+
+
+def executar_busca_pedidos_shopify(
     estado: MutableMapping[str, Any],
     gerenciador: GerenciadorProgresso,
     data_inicio_str: str,
@@ -6944,7 +7267,7 @@ def iniciar_todas_as_buscas(
     fulfillment_status: str = "any",
     depois: Callable[[], None] | None = None,
 ) -> None:
-    print("[🧪] iniciar_todas_as_buscas recebeu depois =", depois)
+    print("[🧪] executar_busca_pedidos_shopify recebeu depois =", depois)
     logger.info(f"[🧪] Threads ativas no pool: {QThreadPool.globalInstance().activeThreadCount()}")
 
     # Salva o gerenciador original apenas se ainda não existir
@@ -7351,21 +7674,25 @@ def exibir_alerta_revisao(enderecos_normalizados: Mapping[str, Mapping[str, Any]
         )
 
 
-def tratar_resultado(
+# -----------------BACKEND SHOPIFY -----------------#
+@dataclass(frozen=True)
+class ResultadoProcessamento:
+    df: pd.DataFrame
+    fretes: dict[str, float]
+    status_fulfillment: dict[str, str]
+    descontos: dict[str, float]
+    remaining_totais: dict[str, int]
+    cep_por_pedido: dict[str, str]
+    linhas_adicionadas: int
+
+
+def processar_resultado_pedidos(
+    *,
     pedidos: Iterable[Mapping[str, Any]],
     produto_alvo: str | None,
     skus_info: Mapping[str, Mapping[str, Any]],
-    estado: MutableMapping[str, Any],
-    gerenciador: GerenciadorProgresso,
-    depois: Callable[[], None] | None,
-) -> None:
-    print("[🧪] tratar_resultado recebeu depois =", depois)
-    estado["df_temp"] = pd.DataFrame()
-    df_temp: pd.DataFrame = estado.get("df_temp", pd.DataFrame())
-
-    # modo de coleta: "any" (tudo) ou "unfulfilled" (somente pendentes)
-    modo_fs: str = (estado.get("fulfillment_status_selecionado") or "any").strip().lower()
-
+    modo_fs: str,
+) -> ResultadoProcessamento:
     # Filtro por produto específico (se marcado)
     ids_filtrados: set[str] = set()
     if produto_alvo and skus_info:
@@ -7375,14 +7702,20 @@ def tratar_resultado(
                 ids_filtrados.update(map(str, dados.get("shopify_ids", [])))
 
     linhas_geradas: list[dict[str, Any]] = []
+    fretes: dict[str, float] = {}
+    status_map: dict[str, str] = {}
+    descontos: dict[str, float] = {}
+    remaining_totais: dict[str, int] = {}
+    cep_por_pedido: dict[str, str] = {}
+
     for pedido in pedidos:
-        # --- dados básicos do pedido (robustos a None) ---
+        # --- dados básicos do pedido ---
         cust: Mapping[str, Any] = pedido.get("customer") or {}
         first = (cust.get("firstName") or "").strip()
         last = (cust.get("lastName") or "").strip()
         nome_cliente = f"{first} {last}".strip()
         email: str = cust.get("email") or ""
-        endereco: Mapping[str, Any] = pedido.get("shippingAddress") or {}  # pode vir None
+        endereco: Mapping[str, Any] = pedido.get("shippingAddress") or {}
         telefone: str = endereco.get("phone", "") or ""
         transaction_id: str = str(pedido.get("id") or "").split("/")[-1]
 
@@ -7403,15 +7736,11 @@ def tratar_resultado(
         except Exception:
             valor_desconto = 0.0
 
-        estado.setdefault("dados_temp", {}).setdefault("fretes", {})[transaction_id] = valor_frete
-        estado.setdefault("dados_temp", {}).setdefault("status_fulfillment", {})[transaction_id] = status_fulfillment
-        estado.setdefault("dados_temp", {}).setdefault("descontos", {})[transaction_id] = valor_desconto
+        fretes[transaction_id] = valor_frete
+        status_map[transaction_id] = status_fulfillment
+        descontos[transaction_id] = valor_desconto
 
-        print(
-            f"[🧾] Pedido {transaction_id} → Status: {status_fulfillment} | Frete: {valor_frete} | Desconto: {valor_desconto}"
-        )
-
-        # --- mapa remainingQuantity por lineItem.id (a partir de fulfillmentOrders) ---
+        # --- mapa remainingQuantity por lineItem.id ---
         remaining_por_line: dict[str, int] = {}
         try:
             fo_edges = (pedido.get("fulfillmentOrders") or {}).get("edges") or []
@@ -7429,14 +7758,10 @@ def tratar_resultado(
             remaining_por_line = {}
 
         total_remaining_pedido = sum(remaining_por_line.values())
-        estado.setdefault("dados_temp", {}).setdefault("remaining_totais", {})[transaction_id] = int(
-            total_remaining_pedido
-        )
+        remaining_totais[transaction_id] = int(total_remaining_pedido)
 
         # --- CEP por pedido ---
-        estado.setdefault("cep_por_pedido", {})[transaction_id] = (
-            (endereco.get("zip", "") or "").replace("-", "").strip()
-        )
+        cep_por_pedido[transaction_id] = (endereco.get("zip", "") or "").replace("-", "").strip()
 
         # --- processar line items ---
         line_edges = (pedido.get("lineItems") or {}).get("edges", [])
@@ -7450,7 +7775,7 @@ def tratar_resultado(
             if ids_filtrados and product_id not in ids_filtrados:
                 continue
 
-            # Descobre nome do produto e SKU a partir do mapeamento do skus.json
+            # Descobre nome do produto e SKU a partir de skus_info
             nome_produto = ""
             sku_item = ""
             for nome_local, dados in skus_info.items():
@@ -7479,80 +7804,121 @@ def tratar_resultado(
             indisponivel_flag = "S" if eh_indisponivel(nome_produto) else "N"
 
             for _ in range(qtd_a_gerar):
-                linha: dict[str, Any] = {
-                    "Número pedido": pedido.get("name", ""),
-                    "Nome Comprador": nome_cliente,
-                    "Data Pedido": (pedido.get("createdAt") or "")[:10],
-                    "Data": local_now().strftime("%d/%m/%Y"),
-                    "CPF/CNPJ Comprador": "",
-                    "Endereço Comprador": endereco.get("address1", ""),
-                    "Bairro Comprador": endereco.get("district", ""),
-                    "Número Comprador": endereco.get("number", ""),
-                    "Complemento Comprador": endereco.get("address2", ""),
-                    "CEP Comprador": endereco.get("zip", ""),
-                    "Cidade Comprador": endereco.get("city", ""),
-                    "UF Comprador": endereco.get("provinceCode", ""),
-                    "Telefone Comprador": telefone,
-                    "Celular Comprador": telefone,
-                    "E-mail Comprador": email,
-                    "Produto": nome_produto,
-                    "SKU": sku_item,
-                    "Un": "UN",
-                    "Quantidade": "1",
-                    "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
-                    "Valor Total": f"{valor_unitario:.2f}".replace(".", ","),
-                    "Total Pedido": "",
-                    "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
-                    "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
-                    "Outras despesas": "",
-                    "Nome Entrega": nome_cliente,
-                    "Endereço Entrega": endereco.get("address1", ""),
-                    "Número Entrega": endereco.get("number", ""),
-                    "Complemento Entrega": endereco.get("address2", ""),
-                    "Cidade Entrega": endereco.get("city", ""),
-                    "UF Entrega": endereco.get("provinceCode", ""),
-                    "CEP Entrega": endereco.get("zip", ""),
-                    "Bairro Entrega": endereco.get("district", ""),
-                    "Transportadora": "",
-                    "Serviço": "",
-                    "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
-                    "Observações": "",
-                    "Qtd Parcela": "",
-                    "Data Prevista": "",
-                    "Vendedor": "",
-                    "Forma Pagamento": "",
-                    "ID Forma Pagamento": "",
-                    "transaction_id": transaction_id,
-                    "id_line_item": id_line_item,
-                    "id_produto": product_id,
-                    "indisponivel": indisponivel_flag,
-                    "Precisa Contato": "SIM",
-                }
-                linhas_geradas.append(linha)
+                linhas_geradas.append(
+                    {
+                        "Número pedido": pedido.get("name", ""),
+                        "Nome Comprador": nome_cliente,
+                        "Data Pedido": (pedido.get("createdAt") or "")[:10],
+                        "Data": local_now().strftime("%d/%m/%Y"),
+                        "CPF/CNPJ Comprador": "",
+                        "Endereço Comprador": endereco.get("address1", ""),
+                        "Bairro Comprador": endereco.get("district", ""),
+                        "Número Comprador": endereco.get("number", ""),
+                        "Complemento Comprador": endereco.get("address2", ""),
+                        "CEP Comprador": endereco.get("zip", ""),
+                        "Cidade Comprador": endereco.get("city", ""),
+                        "UF Comprador": endereco.get("provinceCode", ""),
+                        "Telefone Comprador": telefone,
+                        "Celular Comprador": telefone,
+                        "E-mail Comprador": email,
+                        "Produto": nome_produto,
+                        "SKU": sku_item,
+                        "Un": "UN",
+                        "Quantidade": "1",
+                        "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
+                        "Valor Total": f"{valor_unitario:.2f}".replace(".", ","),
+                        "Total Pedido": "",
+                        "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
+                        "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
+                        "Outras despesas": "",
+                        "Nome Entrega": nome_cliente,
+                        "Endereço Entrega": endereco.get("address1", ""),
+                        "Número Entrega": endereco.get("number", ""),
+                        "Complemento Entrega": endereco.get("address2", ""),
+                        "Cidade Entrega": endereco.get("city", ""),
+                        "UF Entrega": endereco.get("provinceCode", ""),
+                        "CEP Entrega": endereco.get("zip", ""),
+                        "Bairro Entrega": endereco.get("district", ""),
+                        "Transportadora": "",
+                        "Serviço": "",
+                        "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
+                        "Observações": "",
+                        "Qtd Parcela": "",
+                        "Data Prevista": "",
+                        "Vendedor": "",
+                        "Forma Pagamento": "",
+                        "ID Forma Pagamento": "",
+                        "transaction_id": transaction_id,
+                        "id_line_item": id_line_item,
+                        "id_produto": product_id,
+                        "indisponivel": indisponivel_flag,
+                        "Precisa Contato": "SIM",
+                    }
+                )
 
-    if linhas_geradas:
-        df_novo = pd.DataFrame(linhas_geradas)
-        df_temp = pd.concat([df_temp, df_novo], ignore_index=True)
-        estado["df_temp"] = df_temp
-        print(f"[✅] {len(linhas_geradas)} itens adicionados ao df_temp.")
-        print(f"[📊] Total atual no df_temp: {len(df_temp)} linhas.")
+    df = pd.DataFrame(linhas_geradas) if linhas_geradas else pd.DataFrame()
+    return ResultadoProcessamento(
+        df=df,
+        fretes=fretes,
+        status_fulfillment=status_map,
+        descontos=descontos,
+        remaining_totais=remaining_totais,
+        cep_por_pedido=cep_por_pedido,
+        linhas_adicionadas=len(linhas_geradas),
+    )
+
+
+# ----------------- UI SHOPIFY -----------------#
+
+
+def tratar_resultado(
+    pedidos: Iterable[Mapping[str, Any]],
+    produto_alvo: str | None,
+    skus_info: Mapping[str, Mapping[str, Any]],
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso,
+    depois: Callable[[], None] | None,
+) -> None:
+    print("[🧪] tratar_resultado recebeu depois =", depois)
+
+    # modo de coleta: "any" (tudo) ou "unfulfilled" (somente pendentes)
+    modo_fs: str = (estado.get("fulfillment_status_selecionado") or "any").strip().lower()
+
+    # --- chama backend puro ---
+    resultado = processar_resultado_pedidos(
+        pedidos=pedidos,
+        produto_alvo=produto_alvo,
+        skus_info=skus_info,
+        modo_fs=modo_fs,
+    )
+
+    # --- integra no estado (UI/orquestração) ---
+    df_temp_atual: pd.DataFrame = estado.get("df_temp", pd.DataFrame())
+    if not df_temp_atual.empty and not resultado.df.empty:
+        estado["df_temp"] = pd.concat([df_temp_atual, resultado.df], ignore_index=True)
     else:
-        print("[⚠️] Nenhum item foi adicionado - possivelmente nenhum item corresponde ao filtro.")
+        estado["df_temp"] = resultado.df
 
-    logger.info(f"[✅] {len(linhas_geradas)} itens adicionados ao df_temp.")
+    print(f"[✅] {resultado.linhas_adicionadas} itens adicionados ao df_temp.")
+    print(f"[📊] Total atual no df_temp: {len(estado['df_temp'])} linhas.")
+
+    logger.info(f"[✅] {resultado.linhas_adicionadas} itens adicionados ao df_temp.")
     logger.info(f"[📊] Total atual no df_temp: {len(estado['df_temp'])} linhas.")
 
+    # flags de etapas
     estado["etapas_finalizadas"] = {"cpf": False, "bairro": False, "endereco": False}
     estado["finalizou_cpfs"] = False
     estado["finalizou_bairros"] = False
     estado["finalizou_enderecos"] = False
 
-    # 🆕 Preserva os dados extras após montar df_temp
-    estado["fretes_shopify"] = estado.get("dados_temp", {}).get("fretes", {}).copy()
-    estado["status_fulfillment_shopify"] = estado.get("dados_temp", {}).get("status_fulfillment", {}).copy()
-    estado["descontos_shopify"] = estado.get("dados_temp", {}).get("descontos", {}).copy()
+    # dados extras preservados
+    estado.setdefault("dados_temp", {})["remaining_totais"] = resultado.remaining_totais
+    estado["cep_por_pedido"] = resultado.cep_por_pedido
+    estado["fretes_shopify"] = resultado.fretes.copy()
+    estado["status_fulfillment_shopify"] = resultado.status_fulfillment.copy()
+    estado["descontos_shopify"] = resultado.descontos.copy()
 
-    logger.info("[🚀] Iniciando fluxo de coleta de CPFs após tratar_resultado.")
+    # UI/progresso
     gerenciador.atualizar("📦 Processando transações recebidas...", 0, 0)
     iniciar_busca_cpfs(estado, estado.get("gerenciador_progresso"), depois)
 
@@ -9524,7 +9890,7 @@ def criar_grupo_guru(
     )
 
     btn_buscar_produtos.clicked.connect(
-        lambda: iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estado)
+        lambda: abrir_dialogo_busca_produtos(box_nome_input, transportadoras_var, skus_info, estado)
     )
 
     outer_layout.addWidget(inner_widget)
@@ -9591,7 +9957,7 @@ def criar_grupo_shopify(
     estado["check_produto"] = check_produto
 
     # Conecta ao fluxo externo
-    btn_buscar.clicked.connect(lambda: executar_fluxo_loja(estado))
+    btn_buscar.clicked.connect(lambda: acionar_busca_pedidos_shopify(estado))
     btn_fulfill.clicked.connect(
         lambda: (
             marcar_itens_como_fulfilled_na_shopify(estado.get("df_planilha_exportada"))
