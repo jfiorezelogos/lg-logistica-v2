@@ -183,7 +183,7 @@
         ],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": true
+        "indisponivel": false
     },
     "Banquete": {
         "sku": "B006A",
@@ -194,7 +194,7 @@
         "composto_de": [],
         "indisponivel": false
     },
-    "Categorias - Aristóteles": {
+    "Aristóteles - Categorias 01": {
         "sku": "L008A",
         "peso": 0.65,
         "guru_ids": [
@@ -204,6 +204,21 @@
             8581899714750,
             8581966594238,
             8581972689086
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": true
+    },
+    "Aristóteles - Obras Completas": {
+        "sku": "C003A",
+        "peso": 0.0,
+        "guru_ids": [
+            "9fd647f8-9471-41e6-8a57-918973e84a17"
+        ],
+        "shopify_ids": [
+            8582036488382,
+            8582088655038,
+            8582093701310
         ],
         "tipo": "produto",
         "composto_de": [],
@@ -322,9 +337,9 @@
         "indisponivel": false
     },
     "Todas obras lançadas": {
-        "sku": "",
+        "sku": "C001A",
         "peso": 0.0,
-        "tipo": "produto",
+        "tipo": "combo",
         "composto_de": [
             "L002A",
             "L001A",
@@ -339,9 +354,9 @@
         "indisponivel": false
     },
     "Combo Boas-vindas": {
-        "sku": "",
+        "sku": "C002A",
         "peso": 0.0,
-        "tipo": "produto",
+        "tipo": "combo",
         "composto_de": [
             "L002A",
             "B004A",
@@ -354,21 +369,15 @@
         "shopify_ids": [],
         "indisponivel": false
     },
-    "Aristóteles - Obras Completas": {
-        "sku": "",
+    "Aristóteles - 4 Volumes Órganon": {
+        "sku": "C004A",
         "peso": 0.0,
-        "tipo": "produto",
-        "composto_de": [
-            "L008A"
-        ],
+        "tipo": "combo",
+        "composto_de": [],
         "guru_ids": [
-            "9fd647f8-9471-41e6-8a57-918973e84a17"
+            "9fd522b3-c35f-4784-8e79-c5892a33a30c"
         ],
-        "shopify_ids": [
-            8582036488382,
-            8582088655038,
-            8582093701310
-        ],
-        "indisponivel": false
+        "shopify_ids": [],
+        "indisponivel": true
     }
 }

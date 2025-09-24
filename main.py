@@ -477,13 +477,15 @@ def abrir_dialogo_mapeamento_guru(
             linha_tipo: QHBoxLayout = QHBoxLayout()
             self.radio_produto = QRadioButton("Produto")
             self.radio_assinatura = QRadioButton("Assinatura")
+            self.radio_combo = QRadioButton("Combo")
             self.radio_produto.setChecked(True)
             self.grupo_tipo = QButtonGroup()
-            self.grupo_tipo.addButton(self.radio_produto)
-            self.grupo_tipo.addButton(self.radio_assinatura)
+            for rb in (self.radio_produto, self.radio_assinatura, self.radio_combo):
+                self.grupo_tipo.addButton(rb)
             linha_tipo.addWidget(QLabel("Tipo:"))
             linha_tipo.addWidget(self.radio_produto)
             linha_tipo.addWidget(self.radio_assinatura)
+            linha_tipo.addWidget(self.radio_combo)
             self.main_layout.addLayout(linha_tipo)
 
             # Assinatura: duração + periodicidade
@@ -620,7 +622,10 @@ def abrir_dialogo_mapeamento_guru(
                 entrada.setdefault("peso", 0.0)
                 entrada.setdefault("composto_de", [])
             else:
-                entrada["tipo"] = "produto"
+                if self.radio_combo.isChecked():
+                    entrada["tipo"] = "combo"
+                else:
+                    entrada["tipo"] = "produto"
                 entrada.pop("recorrencia", None)
                 entrada.pop("periodicidade", None)
 
@@ -2659,7 +2664,7 @@ def buscar_transacoes_individuais(
                 break
 
         pagina = cast(list[dict[str, Any]], data.get("data", []) or [])
-        print(f"[📄 Página {pagina_count+1}] {len(pagina)} assinaturas encontradas")
+        print(f"[📄 Página {pagina_count+1}] {len(pagina)} vendas encontradas")
 
         for t in pagina:
             if cancelador and cancelador.is_set():
@@ -8940,9 +8945,9 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
     def adicionar_combo() -> None:
         row: int = tabela_combo.rowCount()
         tabela_combo.insertRow(row)
-        for col in range(5):
+        for col in range(6):
             tabela_combo.setItem(row, col, QTableWidgetItem(""))
-        tabela_combo.setCellWidget(row, 5, _mk_checkbox(False))  # Indisp.
+        tabela_combo.setCellWidget(row, 6, _mk_checkbox(False))  # Indisp.
 
     # 🧹 Funções para remover linha selecionada
     def remover_produto() -> None:
@@ -9027,7 +9032,7 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
                 # indisponivel
                 tabela_assin.setCellWidget(row, 5, _mk_checkbox(bool(info.get("indisponivel", False))))
             # COMBOS
-            elif info.get("composto_de", []):
+            elif info.get("tipo") == "combo":
                 row = tabela_combo.rowCount()
                 tabela_combo.insertRow(row)
                 tabela_combo.setItem(row, 0, QTableWidgetItem(nome))
@@ -9138,7 +9143,7 @@ def abrir_editor_skus(box_nome_input: QComboBox | None = None) -> None:
             skus[nome] = {
                 "sku": sku,
                 "peso": 0.0,
-                "tipo": "produto",  # combos seguem seu padrão
+                "tipo": "combo",
                 "composto_de": [x.strip() for x in composto.split(",") if x.strip()],
                 "guru_ids": [x.strip() for x in guru.split(",") if x.strip()],
                 "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
