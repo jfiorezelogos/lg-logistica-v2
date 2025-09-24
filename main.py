@@ -1656,6 +1656,9 @@ class WorkerController(QObject):
         self.skus_info: Any = skus_info
         self.iniciar_worker_signal.connect(self.iniciar_worker)
 
+        # ✅ garante atributo para o mypy e para o runtime
+        self._timer: QTimer | None = None
+
     def iniciar_worker(self) -> None:
         try:
             gerenciador = GerenciadorProgresso(
@@ -1673,7 +1676,6 @@ class WorkerController(QObject):
             self.estado["worker_thread"] = WorkerThread(self.dados, self.estado, self.skus_info, gerenciador)
             worker: WorkerThread = cast(WorkerThread, self.estado["worker_thread"])
 
-            # avisos e erros
             worker.avisar_usuario.connect(
                 lambda titulo, msg: comunicador_global.mostrar_mensagem.emit("aviso", titulo, msg)
             )
@@ -1687,7 +1689,14 @@ class WorkerController(QObject):
 
             worker.erro.connect(on_erro)
 
-            # finalização
+            # (opcional) se você quer um "failsafe" para fechar a UI após X ms:
+            if self._timer is None:
+                self._timer = QTimer(self)
+                self._timer.setSingleShot(True)
+                self._timer.timeout.connect(lambda: with_suppress_close(gerenciador))
+                # defina um intervalo se fizer sentido (ex.: 30s)
+                # self._timer.start(30_000)
+
             def ao_finalizar_worker(linhas: list[Any], contagem: dict[str, Any]) -> None:
                 try:
                     exibir_resumo_final(
@@ -1697,22 +1706,30 @@ class WorkerController(QObject):
                         modo=(cast(str, self.dados.get("modo") or "")).lower(),
                     )
                 finally:
+                    # ✅ acesso seguro ao _timer
+                    if self._timer is not None:
+                        with suppress(Exception):
+                            self._timer.stop()
+                            self._timer.deleteLater()
+                        self._timer = None
                     with suppress(Exception):
-                        self._timer.stop()
+                        gerenciador.fechar()
 
             worker.finalizado.connect(ao_finalizar_worker)
-
-            # (opcional) fallback extra - pode ser removido se preferir evitar chamadas duplicadas de fechar
-            # worker.finished.connect(gerenciador.fechar)
+            # worker.finished.connect(gerenciador.fechar)  # opcional
 
             worker.start()
             print("[🧵 iniciar_worker] Thread iniciada.")
-
         except Exception as e:
             print("[❌ ERRO EM iniciar_worker]:", e)
-
             print(traceback.format_exc())
             comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Falha ao iniciar a exportação:\n{e!s}")
+
+
+# helper opcional para usar no timeout
+def with_suppress_close(gerenciador: "GerenciadorProgresso") -> None:
+    with suppress(Exception):
+        gerenciador.fechar()
 
 
 class WorkerThread(QThread):
