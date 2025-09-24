@@ -21,7 +21,6 @@ from collections import Counter, OrderedDict, defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, suppress
-from dataclasses import dataclass
 from datetime import UTC, date, datetime, time as dtime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import JSONDecodeError
@@ -416,175 +415,6 @@ def _fim_bimestre_por_data(dt: datetime) -> datetime:
 LIMITE_INFERIOR = datetime(2024, 10, 1, tzinfo=UTC)
 
 
-# Gerenciamento de barra de progresso na interface.
-class GerenciadorProgresso(QObject):
-    atualizar_signal = pyqtSignal(str, int, int)
-    finalizado_signal = pyqtSignal()
-
-    def __init__(
-        self,
-        *,
-        titulo: str = "Progresso",
-        com_percentual: bool = True,
-        estado_global: MutableMapping[str, Any] | None = None,
-        logger_obj: Logger | None = None,
-    ) -> None:
-        super().__init__()
-
-        self.cancelado: bool = False
-        self.com_percentual: bool = com_percentual
-        self._ja_fechado: bool = False
-        self.janela_feita: bool = False
-
-        # estado como dict-like mutável
-        self.estado: MutableMapping[str, Any] = (
-            cast(MutableMapping[str, Any], estado_global) if estado_global is not None else {}
-        )
-        self.logger: Logger | None = logger_obj
-
-        try:
-            self.janela: QDialog = QDialog()
-            self.janela.setWindowTitle(titulo)
-            self.janela.setFixedSize(500, 160)
-            self.janela.setAttribute(Qt.WA_DeleteOnClose, True)
-
-            layout: QVBoxLayout = QVBoxLayout(self.janela)
-
-            self.label_status: QLabel = QLabel("Iniciando...")
-            self.label_status.setAlignment(Qt.AlignCenter)
-            layout.addWidget(self.label_status)
-
-            self.barra: QProgressBar = QProgressBar()
-            if not self.com_percentual:
-                self.barra.setRange(0, 0)
-            layout.addWidget(self.barra)
-
-            self.botao_cancelar: QPushButton = QPushButton("Cancelar")
-            self.botao_cancelar.clicked.connect(self.cancelar)
-            layout.addWidget(self.botao_cancelar)
-
-            # Stubs do PyQt às vezes não aceitam o kwarg 'type' -> silenciar para mypy
-            self.atualizar_signal.connect(self._atualizar_seguro)
-
-            self.janela.show()
-            self.janela.raise_()
-            self.janela.activateWindow()
-            self.janela.showNormal()
-
-            screen = QGuiApplication.primaryScreen().availableGeometry()
-            x = screen.center().x() - self.janela.width() // 2
-            y = screen.center().y() - self.janela.height() // 2
-            self.janela.move(x, y)
-
-            QApplication.processEvents()
-
-        except Exception as e:
-            if self.logger:
-                self.logger.exception("Erro ao inicializar janela de progresso")
-            else:
-                print(f"[❌] Erro ao inicializar janela: {e}")
-
-    def cancelar(self) -> None:
-        self.cancelado = True
-        self.label_status.setText("Cancelado pelo usuário.")
-        self.botao_cancelar.setEnabled(False)
-
-        cancelador = self.estado.get("cancelador_global")
-        if isinstance(cancelador, Event):
-            cancelador.set()
-        else:
-            self._log_warning("[🛑] Cancelamento detectado, mas sem Event válido.")
-
-        print("[🛑] Cancelamento solicitado.")
-
-    def atualizar(self, texto: str, atual: int | None = None, total: int | None = None) -> None:
-        self.atualizar_signal.emit(texto, atual or 0, total or 0)
-
-    def _atualizar_seguro(self, texto: str, atual: int, total: int) -> None:
-        self.label_status.setText(texto)
-
-        if not self.com_percentual:
-            QApplication.processEvents()
-            return
-
-        if total == 0:
-            self.barra.setRange(0, 0)
-        else:
-            self.barra.setRange(0, 100)
-            progresso = min(100, max(1, int(100 * atual / total))) if total else 0
-            self.barra.setValue(progresso)
-
-        QApplication.processEvents()
-
-    def fechar(self) -> None:
-        if self._ja_fechado:
-            self._log_info("[🔁] Janela já havia sido fechada. Ignorando.")
-            return
-        self._ja_fechado = True
-        self._log_info("[🔚 GerenciadorProgresso] Preparando para fechar a janela...")
-
-        def encerrar() -> None:
-            try:
-                if self.janela and self.janela.isVisible():
-                    self._log_info("[🧼] Ocultando janela de progresso...")
-                    self.janela.hide()
-                if self.janela:
-                    self._log_info("[✅] Fechando janela de progresso...")
-                    self.janela.close()
-            except Exception as e:
-                self._log_exception(f"[❌] Erro ao fechar janela: {e}")
-
-        app = cast(QCoreApplication, QCoreApplication.instance())  # para mypy: não é None aqui
-        if QThread.currentThread() == app.thread():
-            encerrar()
-        else:
-            QTimer.singleShot(0, encerrar)
-
-    def _log_info(self, msg: str) -> None:
-        if self.logger:
-            self.logger.info(msg)
-        else:
-            print(msg)
-
-    def _log_warning(self, msg: str) -> None:
-        if self.logger:
-            self.logger.warning(msg)
-        else:
-            print(msg)
-
-    def _log_exception(self, msg: str) -> None:
-        if self.logger:
-            self.logger.exception(msg)
-        else:
-            print(msg)
-
-
-def iniciar_progresso(
-    titulo: str = "Progresso",
-    com_percentual: bool = True,
-    estado_global: MutableMapping[str, Any] | None = None,
-    logger_obj: Logger | None = None,
-) -> GerenciadorProgresso:
-    if QApplication.instance() is None:
-        raise RuntimeError("QApplication ainda não foi iniciado.")
-
-    gerenciador = GerenciadorProgresso(
-        titulo=titulo,
-        com_percentual=com_percentual,
-        estado_global=estado_global,
-        logger_obj=logger_obj or logger,
-    )
-    QApplication.processEvents()
-    return gerenciador
-
-
-class HasIsSet(Protocol):
-    def is_set(self) -> bool: ...
-
-
-# Integração com a API do Digital Manager Guru
-
-
 # Mapear produtos do Guru (serviço backend, sem UI)
 def buscar_todos_produtos_guru() -> list[dict[str, Any]]:
     url = f"{BASE_URL_GURU}/products"
@@ -941,7 +771,7 @@ def listar_brindes_possiveis(skus_info: Mapping[str, Any]) -> list[str]:
     return sorted(n for n, info in skus_info.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura")
 
 
-def carregar_ofertas_produto(prod_id: str) -> list[dict[str, Any]]:
+def carregar_ofertas_backend(prod_id: str) -> list[dict[str, Any]]:
     """Porta para buscar ofertas de um produto Guru (sem PyQt)."""
     if not prod_id:
         return []
@@ -958,7 +788,7 @@ def carregar_ofertas_produto(prod_id: str) -> list[dict[str, Any]]:
     return norm
 
 
-def criar_regra(
+def construir_regra_backend(
     *,
     regra_antiga: dict[str, Any] | None,
     applies_to: Literal["oferta", "cupom"],
@@ -1229,7 +1059,7 @@ class RuleEditorDialog(QDialog):
         if not prod_id:
             return
 
-        ofertas = carregar_ofertas_produto(prod_id)
+        ofertas = carregar_ofertas_backend(prod_id)
         for o in ofertas:
             oid = o["id"]
             nome = o["name"]
@@ -1275,7 +1105,7 @@ class RuleEditorDialog(QDialog):
 
         # Backend: construir regra
         try:
-            self.regra = criar_regra(
+            self.regra = construir_regra_backend(
                 regra_antiga=self.regra,
                 applies_to=applies_to,
                 action_type=action_type,
@@ -1609,7 +1439,7 @@ class RuleManagerDialog(QDialog):
         self._map_cupons = vm["map_coupons"]
         self._map_ofertas = vm["map_offers"]
 
-    def _current_table_and_map(self) -> tuple[QTableWidget, list[int]]:
+    def _current_table_and_map(self):
         if self.tabs.currentWidget() is self.tab_cupons:
             return self.tbl_cupons, self._map_cupons
         return self.tbl_ofertas, self._map_ofertas
@@ -1713,7 +1543,7 @@ class RuleManagerDialog(QDialog):
 class GuruCatalogService:
     """Serviço de catálogo do Guru (produtos + ofertas)."""
 
-    def __init__(self, *, base_url: str, headers: dict[str, str], http_get: Callable[..., Any]) -> None:
+    def __init__(self, *, base_url: str, headers: dict[str, str], http_get) -> None:
         self.base_url = base_url.rstrip("/")
         self.headers = headers
         self.http_get = http_get
@@ -1755,7 +1585,7 @@ class GuruCatalogService:
                     break
 
                 data: dict[str, Any] = r.json()
-                pagina_dados: list[dict[str, Any]] = data.get("data", [])
+                pagina_dados = data.get("data", [])
                 print(f"[📄 Página {pagina}] {len(pagina_dados)} ofertas encontradas para produto {product_id}")
 
                 ofertas += pagina_dados
@@ -1796,6 +1626,175 @@ def abrir_mapeador_regras(
     dlg.exec_()
 
 
+# Gerenciamento de barra de progresso na interface.
+class GerenciadorProgresso(QObject):
+    atualizar_signal = pyqtSignal(str, int, int)
+    finalizado_signal = pyqtSignal()
+
+    def __init__(
+        self,
+        *,
+        titulo: str = "Progresso",
+        com_percentual: bool = True,
+        estado_global: MutableMapping[str, Any] | None = None,
+        logger_obj: Logger | None = None,
+    ) -> None:
+        super().__init__()
+
+        self.cancelado: bool = False
+        self.com_percentual: bool = com_percentual
+        self._ja_fechado: bool = False
+        self.janela_feita: bool = False
+
+        # estado como dict-like mutável
+        self.estado: MutableMapping[str, Any] = (
+            cast(MutableMapping[str, Any], estado_global) if estado_global is not None else {}
+        )
+        self.logger: Logger | None = logger_obj
+
+        try:
+            self.janela: QDialog = QDialog()
+            self.janela.setWindowTitle(titulo)
+            self.janela.setFixedSize(500, 160)
+            self.janela.setAttribute(Qt.WA_DeleteOnClose, True)
+
+            layout: QVBoxLayout = QVBoxLayout(self.janela)
+
+            self.label_status: QLabel = QLabel("Iniciando...")
+            self.label_status.setAlignment(Qt.AlignCenter)
+            layout.addWidget(self.label_status)
+
+            self.barra: QProgressBar = QProgressBar()
+            if not self.com_percentual:
+                self.barra.setRange(0, 0)
+            layout.addWidget(self.barra)
+
+            self.botao_cancelar: QPushButton = QPushButton("Cancelar")
+            self.botao_cancelar.clicked.connect(self.cancelar)
+            layout.addWidget(self.botao_cancelar)
+
+            # Stubs do PyQt às vezes não aceitam o kwarg 'type' -> silenciar para mypy
+            self.atualizar_signal.connect(self._atualizar_seguro)
+
+            self.janela.show()
+            self.janela.raise_()
+            self.janela.activateWindow()
+            self.janela.showNormal()
+
+            screen = QGuiApplication.primaryScreen().availableGeometry()
+            x = screen.center().x() - self.janela.width() // 2
+            y = screen.center().y() - self.janela.height() // 2
+            self.janela.move(x, y)
+
+            QApplication.processEvents()
+
+        except Exception as e:
+            if self.logger:
+                self.logger.exception("Erro ao inicializar janela de progresso")
+            else:
+                print(f"[❌] Erro ao inicializar janela: {e}")
+
+    def cancelar(self) -> None:
+        self.cancelado = True
+        self.label_status.setText("Cancelado pelo usuário.")
+        self.botao_cancelar.setEnabled(False)
+
+        cancelador = self.estado.get("cancelador_global")
+        if isinstance(cancelador, Event):
+            cancelador.set()
+        else:
+            self._log_warning("[🛑] Cancelamento detectado, mas sem Event válido.")
+
+        print("[🛑] Cancelamento solicitado.")
+
+    def atualizar(self, texto: str, atual: int | None = None, total: int | None = None) -> None:
+        self.atualizar_signal.emit(texto, atual or 0, total or 0)
+
+    def _atualizar_seguro(self, texto: str, atual: int, total: int) -> None:
+        self.label_status.setText(texto)
+
+        if not self.com_percentual:
+            QApplication.processEvents()
+            return
+
+        if total == 0:
+            self.barra.setRange(0, 0)
+        else:
+            self.barra.setRange(0, 100)
+            progresso = min(100, max(1, int(100 * atual / total))) if total else 0
+            self.barra.setValue(progresso)
+
+        QApplication.processEvents()
+
+    def fechar(self) -> None:
+        if self._ja_fechado:
+            self._log_info("[🔁] Janela já havia sido fechada. Ignorando.")
+            return
+        self._ja_fechado = True
+        self._log_info("[🔚 GerenciadorProgresso] Preparando para fechar a janela...")
+
+        def encerrar() -> None:
+            try:
+                if self.janela and self.janela.isVisible():
+                    self._log_info("[🧼] Ocultando janela de progresso...")
+                    self.janela.hide()
+                if self.janela:
+                    self._log_info("[✅] Fechando janela de progresso...")
+                    self.janela.close()
+            except Exception as e:
+                self._log_exception(f"[❌] Erro ao fechar janela: {e}")
+
+        app = cast(QCoreApplication, QCoreApplication.instance())  # para mypy: não é None aqui
+        if QThread.currentThread() == app.thread():
+            encerrar()
+        else:
+            QTimer.singleShot(0, encerrar)
+
+    def _log_info(self, msg: str) -> None:
+        if self.logger:
+            self.logger.info(msg)
+        else:
+            print(msg)
+
+    def _log_warning(self, msg: str) -> None:
+        if self.logger:
+            self.logger.warning(msg)
+        else:
+            print(msg)
+
+    def _log_exception(self, msg: str) -> None:
+        if self.logger:
+            self.logger.exception(msg)
+        else:
+            print(msg)
+
+
+def iniciar_progresso(
+    titulo: str = "Progresso",
+    com_percentual: bool = True,
+    estado_global: MutableMapping[str, Any] | None = None,
+    logger_obj: Logger | None = None,
+) -> GerenciadorProgresso:
+    if QApplication.instance() is None:
+        raise RuntimeError("QApplication ainda não foi iniciado.")
+
+    gerenciador = GerenciadorProgresso(
+        titulo=titulo,
+        com_percentual=com_percentual,
+        estado_global=estado_global,
+        logger_obj=logger_obj or logger,
+    )
+    QApplication.processEvents()
+    return gerenciador
+
+
+class HasIsSet(Protocol):
+    def is_set(self) -> bool: ...
+
+
+# Integração com a API do Digital Manager Guru
+
+
 # ----------------------------- BACKEND / VARIAVEIS GLOBAIS ASSINATURAS -----------------------------
 
 ASSINATURAS, GURU_META = obter_ids_assinaturas_por_duracao(skus_info)
@@ -1805,96 +1804,6 @@ ASSINATURAS_BIMESTRAIS = ASSINATURAS.get("bimestral", [])
 ASSINATURAS_ANUAIS = ASSINATURAS.get("anual", [])
 ASSINATURAS_BIANUAIS = ASSINATURAS.get("bianual", [])
 ASSINATURAS_TRIANUAIS = ASSINATURAS.get("trianual", [])
-
-# ----------------------------- BACKEND / WORKER THREAD -----------------------------
-
-
-class DummyCancelador:
-    def is_set(self) -> bool:
-        return False
-
-
-def consolidar_transacoes(
-    *,
-    dados: Mapping[str, Any],
-    estado: MutableMapping[str, Any],
-    skus_info: Any,
-    atualizar: Callable[[str, int, int], None],  # callback de progresso
-    cancelado: Callable[[], bool],  # consulta cancelamento
-    logger: logging.Logger,
-) -> tuple[list[Any], dict[str, Any], list[str]]:
-    """Executa o fluxo de exportação. Sem PyQt, sem threads aqui.
-    Retorna (novas_linhas, contagem, transacoes_com_erro)."""
-
-    logger.info("worker_started", extra={"modo": dados.get("modo")})
-
-    # cancelador opcional vindo do estado (já existe HasIsSet)
-    _cancel_event = cast(HasIsSet, estado.get("cancelador_global") or DummyCancelador())
-    if callable(cancelado) and cancelado():
-        logger.warning("worker_cancelled_early")
-        return [], {}, []
-
-    modo: str = str(dados.get("modo") or "assinaturas").strip().lower()
-
-    # Busca (ramo por modo)
-    if modo == "assinaturas":
-        atualizar("🔄 Buscando transações de assinaturas...", 0, 0)
-        transacoes_raw, _unused, dados_final_map_raw = buscar_transacoes_assinaturas(
-            dict(dados), atualizar=atualizar, cancelador=_cancel_event, estado=dict(estado)
-        )
-    elif modo == "produtos":
-        atualizar("🔄 Buscando transações de produtos...", 0, 0)
-        transacoes_raw, _unused, dados_final_map_raw = buscar_transacoes_produtos(
-            dict(dados), atualizar=atualizar, cancelador=_cancel_event, estado=dict(estado)
-        )
-    else:
-        raise ValueError(f"Modo de busca desconhecido: {modo}")
-
-    if cancelado():
-        logger.warning("worker_cancelled_after_fetch")
-        return [], {}, []
-
-    # Normalizações mínimas
-    dados_final_map = cast(Mapping[str, Any], dados_final_map_raw)
-    if not isinstance(dados_final_map, Mapping):
-        raise ValueError("Dados inválidos retornados da busca.")
-    dados_final: dict[str, Any] = dict(dados_final_map)
-
-    transacoes = cast(list[Any], transacoes_raw)
-    if not isinstance(transacoes, list):
-        raise ValueError("Transações retornadas em formato inválido.")
-
-    logger.info("worker_received_transactions", extra={"qtd": len(transacoes), "modo": modo})
-    atualizar("📦 Processando transações", 0, 100)
-
-    # Processamento
-    novas_linhas, contagem_map = processar_planilha(
-        transacoes=transacoes,
-        dados=dados_final,
-        atualizar_etapa=atualizar,
-        skus_info=skus_info,
-        cancelador=_cancel_event,  # HasIsSet | None
-        estado=dict(estado),
-    )
-    if not isinstance(contagem_map, Mapping):
-        raise ValueError("Retorno inválido de processar_planilha (esperado Mapping).")
-    contagem: dict[str, Any] = dict(cast(Mapping[str, Any], contagem_map))
-
-    if cancelado():
-        logger.warning("worker_cancelled_after_process")
-        return [], {}, []
-
-    atualizar("✅ Finalizando...", 100, 100)
-
-    # erros acumulados no estado (se existirem) -> garantir list[str]
-    erros_raw = estado.get("transacoes_com_erro", [])
-    transacoes_com_erro: list[str] = [x for x in erros_raw if isinstance(x, str)]
-
-    logger.info("worker_success", extra={"linhas_adicionadas": len(novas_linhas)})
-    return novas_linhas, contagem, transacoes_com_erro
-
-
-# ----------------------------- UI / WORKER THREAD -----------------------------
 
 
 class WorkerController(QObject):
@@ -1910,10 +1819,6 @@ class WorkerController(QObject):
         self.dados: Mapping[str, Any] = dados
         self.estado: MutableMapping[str, Any] = estado
         self.skus_info: Any = skus_info
-
-        # ➜ define o atributo para o mypy
-        self._timer: QTimer | None = None
-
         self.iniciar_worker_signal.connect(self.iniciar_worker)
 
     def iniciar_worker(self) -> None:
@@ -1958,8 +1863,7 @@ class WorkerController(QObject):
                     )
                 finally:
                     with suppress(Exception):
-                        if self._timer is not None:
-                            self._timer.stop()
+                        self._timer.stop()
 
             worker.finalizado.connect(ao_finalizar_worker)
 
@@ -1977,27 +1881,29 @@ class WorkerController(QObject):
 
 
 class WorkerThread(QThread):
+    # sinais esperados pelo Controller
     finalizado = pyqtSignal(list, dict)
     erro = pyqtSignal(str)
     avisar_usuario = pyqtSignal(str, str)
 
+    # sinais para progresso/fechamento seguro entre threads
     progresso = pyqtSignal(str, int, int)
     fechar_ui = pyqtSignal()
 
     def __init__(
         self,
-        dados: Mapping[str, Any],
-        estado: MutableMapping[str, Any],
+        dados: Mapping[str, Any],  # aceita qualquer mapeamento (sem cópia)
+        estado: MutableMapping[str, Any],  # mutável (dict-like)
         skus_info: Any,
         gerenciador: GerenciadorProgresso,
     ) -> None:
         super().__init__()
-        self.dados = dados
-        self.estado = estado
-        self.skus_info = skus_info
-        self.gerenciador = gerenciador
+        self.dados: Mapping[str, Any] = dados
+        self.estado: MutableMapping[str, Any] = estado
+        self.skus_info: Any = skus_info
+        self.gerenciador: GerenciadorProgresso = gerenciador
 
-        # mantém as conexões por sinal (UI thread-safe)
+        # Mantém Qt.QueuedConnection, mas silencia o stub do PyQt para mypy
         self.progresso.connect(self.gerenciador.atualizar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
         self.fechar_ui.connect(self.gerenciador.fechar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
 
@@ -2005,34 +1911,103 @@ class WorkerThread(QThread):
 
     def run(self) -> None:
         set_correlation_id(self._parent_correlation_id)
+
+        novas_linhas: list[Any] = []
+        contagem: dict[str, Any] = {}
+
         try:
             logger.info("worker_started", extra={"modo": self.dados.get("modo")})
 
-            # callbacks puros para o backend
-            def atualizar_cb(txt: str, a: int, b: int) -> None:
-                self.progresso.emit(txt, a, b)
+            # tipagem apenas: Optional[Event] + union-attr ignore
+            cancelador: Event | None = cast(Event | None, self.estado.get("cancelador_global"))
+            if hasattr(cancelador, "is_set") and cancelador.is_set():  # type: ignore[union-attr]
+                logger.warning("worker_cancelled_early")
+                return
 
-            def cancelado_cb() -> bool:
-                ev = self.estado.get("cancelador_global")
-                return ev.is_set() if isinstance(ev, Event) else False
+            modo = (cast(str, self.dados.get("modo") or "assinaturas")).strip().lower()
 
-            novas_linhas, contagem, erros = consolidar_transacoes(
-                dados=self.dados,
-                estado=self.estado,
-                skus_info=self.skus_info,
-                atualizar=atualizar_cb,
-                cancelado=cancelado_cb,
-                logger=logger,
+            # buscamos em ramos separados, mas NÃO atribuimos a dados_final ainda
+            if modo == "assinaturas":
+                self.progresso.emit("🔄 Buscando transações de assinaturas...", 0, 0)
+                transacoes, _, dados_final_map = buscar_transacoes_assinaturas(
+                    cast(dict[str, Any], self.dados),  # tipagem
+                    atualizar=self.progresso.emit,
+                    cancelador=cast(Event, self.estado["cancelador_global"]),  # tipagem
+                    estado=cast(dict[str, Any], self.estado),  # tipagem
+                )
+
+            elif modo == "produtos":
+                self.progresso.emit("🔄 Buscando transações de produtos...", 0, 0)
+                transacoes, _, dados_final_map = buscar_transacoes_produtos(
+                    cast(dict[str, Any], self.dados),
+                    atualizar=self.progresso.emit,
+                    cancelador=cast(Event, self.estado["cancelador_global"]),
+                    estado=cast(dict[str, Any], self.estado),
+                )
+
+            else:
+                raise ValueError(f"Modo de busca desconhecido: {modo}")
+
+            # Unificação de tipo: Mapping -> dict UMA única vez
+            if not isinstance(dados_final_map, Mapping):
+                raise ValueError("Dados inválidos retornados da busca.")
+            dados_final: dict[str, Any] = dict(dados_final_map)
+
+            if cast(Event, self.estado["cancelador_global"]).is_set():
+                logger.warning("worker_cancelled_after_fetch")
+                return
+
+            self.progresso.emit("📦 Processando transações", 0, 100)
+
+            if not isinstance(transacoes, list) or not isinstance(dados_final, dict):
+                raise ValueError("Dados inválidos retornados da busca.")
+
+            logger.info(
+                "worker_received_transactions",
+                extra={"qtd": len(transacoes), "modo": modo},
             )
 
-            # Atualiza estado (único ponto que toca estado mutável da UI)
+            # processar_planilha pode devolver Mapping; usamos var intermediária
+            novas_linhas, contagem_map = processar_planilha(
+                transacoes=transacoes,
+                dados=dados_final,
+                atualizar_etapa=self.progresso.emit,
+                skus_info=self.skus_info,
+                cancelador=cast(Event, self.estado["cancelador_global"]),
+                estado=cast(dict[str, Any], self.estado),
+            )
+
+            if not isinstance(contagem_map, Mapping):
+                raise ValueError("Retorno inválido de processar_planilha (esperado Mapping).")
+            contagem = dict(contagem_map)  # Mapping -> dict (sem reanotar)
+
+            if cast(Event, self.estado["cancelador_global"]).is_set():
+                logger.warning("worker_cancelled_after_process")
+                return
+
+            self.progresso.emit("✅ Finalizando...", 100, 100)
+
+            if not isinstance(novas_linhas, list) or not isinstance(contagem, dict):
+                raise ValueError("Retorno inválido de processar_planilha.")
+
             if "linhas_planilha" not in self.estado or not isinstance(self.estado["linhas_planilha"], list):
                 self.estado["linhas_planilha"] = []
             self.estado["linhas_planilha"].extend(novas_linhas)
             self.estado["transacoes_obtidas"] = True
 
-            # Aviso de erros (se houver)
-            if erros:
+            logger.info("worker_success", extra={"linhas_adicionadas": len(novas_linhas)})
+
+        except Exception as e:
+            logger.exception("worker_error", extra={"err": str(e)})
+            self.erro.emit(str(e))
+
+        finally:
+            logger.info("worker_finished")
+            self.progresso.emit("✅ Finalizado com sucesso", 1, 1)
+            self.fechar_ui.emit()
+
+            erros = self.estado.get("transacoes_com_erro", [])
+            if isinstance(erros, list) and erros:
                 mensagem = (
                     f"{len(erros)} transações apresentaram erro durante o processo.\n"
                     "Elas foram ignoradas e não estão na planilha.\n\n"
@@ -2044,47 +2019,41 @@ class WorkerThread(QThread):
 
             self.finalizado.emit(novas_linhas, contagem)
 
-        except Exception as e:
-            logger.exception("worker_error", extra={"err": str(e)})
-            self.erro.emit(str(e))
-
-        finally:
-            logger.info("worker_finished")
-            self.progresso.emit("✅ Finalizado com sucesso", 1, 1)
-            self.fechar_ui.emit()
-
-
-# ----------------------------- BACKEND / BUSCA DE PRODUTOS -----------------------------
-
 
 def dividir_busca_em_periodos(
     data_inicio: str | date | datetime,
     data_fim: str | date | datetime,
 ) -> list[tuple[str, str]]:
+    """Divide o intervalo em blocos com fins em abr/ago/dez.
+
+    Retorna lista de tuplas (YYYY-MM-DD, YYYY-MM-DD). Internamente usa datetime aware (UTC).
+    """
+
     ini = _as_dt(data_inicio)
     if not ini.tzinfo:
         ini = ini.replace(tzinfo=UTC)
-    ini = ini.replace(hour=0, minute=0, second=0, microsecond=0)
-
     end = _as_dt(data_fim)
     if not end.tzinfo:
         end = end.replace(tzinfo=UTC)
-    end = end.replace(hour=23, minute=59, second=59, microsecond=0)
-
-    if ini > end:
-        return []
 
     blocos: list[tuple[str, str]] = []
     atual = ini
+
     while atual <= end:
         ano = atual.year
         mes = atual.month
+
+        # Blocos: jan-abr, mai-ago, set-dez
         fim_mes = 4 if mes <= 4 else (8 if mes <= 8 else 12)
+
         ultimo_dia = monthrange(ano, fim_mes)[1]
         fim_bloco = datetime(ano, fim_mes, ultimo_dia, 23, 59, 59, tzinfo=UTC)
+
         fim_bloco = min(fim_bloco, end)
+
         blocos.append((atual.date().isoformat(), fim_bloco.date().isoformat()))
 
+        # avança para o próximo bloco
         proximo_mes = fim_mes + 1
         proximo_ano = ano
         if proximo_mes > 12:
@@ -2095,197 +2064,7 @@ def dividir_busca_em_periodos(
     return blocos
 
 
-def executar_busca_produtos(
-    *,
-    data_ini: str,
-    data_fim: str,
-    nome_produto: str | None,
-    box_nome: str | None,
-    transportadoras_sel: Mapping[str, bool],
-    estado: MutableMapping[str, Any],
-    skus_info: Mapping[str, Mapping[str, Any]],
-) -> None:
-    print(f"[🔎] Iniciando busca de produtos de {data_ini} a {data_fim}")
-    produtos_alvo: dict[str, Mapping[str, Any]] = {}
-
-    # 🎯 Seleciona produtos válidos (somente não-assinatura)
-    if nome_produto:
-        info = skus_info.get(nome_produto, {})
-        if info.get("tipo") == "assinatura":
-            # Sem UI aqui: sinalize pelo estado (a UI decide como exibir)
-            estado.setdefault("mensagens", []).append(
-                {
-                    "tipo": "erro",
-                    "titulo": "Erro",
-                    "texto": f"'{nome_produto}' é uma assinatura. Selecione apenas produtos.",
-                }
-            )
-            return
-        produtos_alvo[nome_produto] = info
-    else:
-        produtos_alvo = {nome: info for nome, info in skus_info.items() if info.get("tipo") != "assinatura"}
-
-    produtos_ids: list[str] = []
-    for info in produtos_alvo.values():
-        gids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
-        for gid in gids:
-            s = str(gid).strip()
-            if s:
-                produtos_ids.append(s)
-
-    if not produtos_ids:
-        estado.setdefault("mensagens", []).append(
-            {
-                "tipo": "aviso",
-                "titulo": "Aviso",
-                "texto": "Nenhum produto com IDs válidos encontrados.",
-            }
-        )
-        return
-
-    dados: dict[str, Any] = {
-        "modo": "produtos",
-        "inicio": data_ini,
-        "fim": data_fim,
-        "produtos_ids": produtos_ids,
-        "box_nome": (box_nome or "").strip(),
-        "transportadoras_permitidas": [nome for nome, marcado in transportadoras_sel.items() if marcado],
-    }
-
-    wt = estado.get("worker_thread")
-    if wt is not None and hasattr(wt, "isRunning") and wt.isRunning():
-        print("[⚠️] Uma execução já está em andamento.")
-        return
-
-    # estruturas no estado
-    estado.setdefault("etapas_finalizadas", {})
-    estado.setdefault("df_planilha_parcial", pd.DataFrame())
-    estado.setdefault("brindes_indisp_set", set())
-    estado.setdefault("embutidos_indisp_set", set())
-    estado.setdefault("linhas_planilha", [])
-    estado.setdefault("mapa_transaction_id_por_linha", {})
-
-    if not isinstance(estado.get("cancelador_global"), threading.Event):
-        estado["cancelador_global"] = threading.Event()
-    estado["cancelador_global"].clear()
-
-    estado["dados_busca"] = dict(dados)
-
-    print("[🚀 executar_busca_produtos] Enviando para WorkerController...")
-
-    try:
-        controller = WorkerController(dados, estado, skus_info)  # classe já existente
-        estado["worker_controller"] = controller
-        controller.iniciar_worker_signal.emit()
-    except Exception as e:
-        print("[❌ ERRO EM iniciar_worker via sinal]:", e)
-        print(traceback.format_exc())
-        # Sem UI direta: notifique via comunicador (se houver) e registre em estado
-        estado.setdefault("mensagens", []).append(
-            {
-                "tipo": "erro",
-                "titulo": "Erro",
-                "texto": f"Ocorreu um erro ao iniciar o processo: {e!s}",
-            }
-        )
-        try:
-            comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Ocorreu um erro ao iniciar o processo:\n{e!s}")
-        except Exception:
-            pass
-
-
-def buscar_transacoes_produtos(
-    dados: Mapping[str, Any],
-    *,
-    atualizar: Callable[[str, int, int], Any] | None = None,
-    cancelador: HasIsSet | None = None,
-    estado: MutableMapping[str, Any] | None = None,
-    logger: Any | None = None,  # <- opcional: injete seu logger
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    """
-    BACKEND: coleta transações de produtos em paralelo para os períodos de dividir_busca_em_periodos.
-    Retorna: (transacoes, extras_dict, eco_de_dados_dict)
-    """
-    log = logger or type("PrintLogger", (), {"info": print, "warning": print, "error": print, "exception": print})()
-
-    log.info("[🔍 buscar_transacoes_produtos] Início da função")
-
-    transacoes: list[dict[str, Any]] = []
-    if estado is None:
-        estado = {}
-    estado["transacoes_com_erro"] = []
-
-    inicio = dados["inicio"]
-    fim = dados["fim"]
-    produtos_ids: list[str] = [str(pid) for pid in (dados.get("produtos_ids") or []) if pid]
-
-    if not produtos_ids:
-        log.warning("[⚠️] Nenhum produto selecionado para busca.")
-        return [], {}, dict(dados)
-
-    intervalos = cast(list[tuple[str, str]], dividir_busca_em_periodos(inicio, fim))
-    tarefas: list[tuple[str, str, str]] = [
-        (product_id, ini, f) for product_id in produtos_ids for (ini, f) in intervalos
-    ]
-
-    log.info(f"[📦] Total de tarefas para produtos: {len(tarefas)}")
-
-    if cancelador and cancelador.is_set():
-        if atualizar:
-            atualizar("⛔ Busca cancelada pelo usuário", 1, 1)
-        return [], {}, dict(dados)
-
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = [executor.submit(buscar_transacoes_com_retry, *args, cancelador=cancelador) for args in tarefas]
-        total_futures = len(futures)
-        concluidos = 0
-
-        while futures:
-            if cancelador and cancelador.is_set():
-                log.warning("[🚫] Cancelado durante busca de produtos.")
-                for f in futures:
-                    f.cancel()
-                return transacoes, {}, dict(dados)
-
-            done, not_done = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
-
-            for future in done:
-                try:
-                    resultado = future.result()
-                    if isinstance(resultado, list):
-                        for item in resultado:
-                            if isinstance(item, dict):
-                                transacoes.append(item)
-                            elif isinstance(item, list):
-                                for subitem in item:
-                                    if isinstance(subitem, dict):
-                                        transacoes.append(subitem)
-                                    else:
-                                        log.warning(f"[⚠️] Ignorado item aninhado não-dict: {type(subitem)}")
-                            else:
-                                log.warning(f"[⚠️] Ignorado item inesperado: {type(item)}")
-                    else:
-                        log.warning(f"[⚠️] Resultado inesperado: {type(resultado)}")
-                except Exception as e:
-                    msg = f"Erro ao buscar transações de produto: {e!s}"
-                    log.exception(f"❌ {msg}")
-                    estado["transacoes_com_erro"].append(msg)
-
-                concluidos += 1
-                if atualizar:
-                    with suppress(Exception):
-                        atualizar("🔄 Coletando transações de produtos...", concluidos, total_futures)
-
-            futures = list(not_done)
-
-    log.info(f"[✅ buscar_transacoes_produtos] Finalizado - {len(transacoes)} transações coletadas")
-    return transacoes, {}, dict(dados)
-
-
-# ----------------------------- UI / DIALOG BUSCA PRODUTOS -----------------------------
-
-
-def abrir_dialogo_busca_produtos(
+def iniciar_busca_produtos(
     box_nome_input: QComboBox,
     transportadoras_var: Mapping[str, QCheckBox],
     skus_info: Mapping[str, Mapping[str, Any]],
@@ -2365,7 +2144,7 @@ def abrir_dialogo_busca_produtos(
         data_ini_s = data_ini_py.isoformat()
         data_fim_s = data_fim_py.isoformat()
 
-        acionar_busca_produtos(
+        executar_busca_produtos(
             data_ini=data_ini_s,
             data_fim=data_fim_s,
             nome_produto=None if nome_produto == "Todos os produtos" else nome_produto,
@@ -2381,7 +2160,7 @@ def abrir_dialogo_busca_produtos(
     dialog.exec_()
 
 
-def acionar_busca_produtos(  # NOVO wrapper UI
+def executar_busca_produtos(
     data_ini: str,
     data_fim: str,
     nome_produto: str | None,
@@ -2390,17 +2169,148 @@ def acionar_busca_produtos(  # NOVO wrapper UI
     estado: MutableMapping[str, Any],
     skus_info: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    box_nome = (box_nome_input.currentText() or "").strip() or None
-    transportadoras_sel = {nome: cb.isChecked() for nome, cb in transportadoras_var.items()}
-    executar_busca_produtos(  # chama o BACKEND puro
-        data_ini=data_ini,
-        data_fim=data_fim,
-        nome_produto=nome_produto,
-        box_nome=box_nome,
-        transportadoras_sel=transportadoras_sel,
-        estado=estado,
-        skus_info=skus_info,
-    )
+    print(f"[🔎] Iniciando busca de produtos de {data_ini} a {data_fim}")
+    produtos_alvo: dict[str, Mapping[str, Any]] = {}
+
+    # 🎯 Seleciona produtos válidos
+    if nome_produto:
+        info = skus_info.get(nome_produto, {})
+        if info.get("tipo") == "assinatura":
+            QMessageBox.warning(None, "Erro", f"'{nome_produto}' é uma assinatura. Selecione apenas produtos.")
+            return
+        produtos_alvo[nome_produto] = info
+    else:
+        produtos_alvo = {nome: info for nome, info in skus_info.items() if info.get("tipo") != "assinatura"}
+
+    produtos_ids: list[str] = []
+    for info in produtos_alvo.values():
+        gids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
+        for gid in gids:
+            s = str(gid).strip()
+            if s:
+                produtos_ids.append(s)
+
+    if not produtos_ids:
+        QMessageBox.warning(None, "Aviso", "Nenhum produto com IDs válidos encontrados.")
+        return
+
+    dados: dict[str, Any] = {
+        "modo": "produtos",  # ← ajuste mantido
+        "inicio": data_ini,
+        "fim": data_fim,
+        "produtos_ids": produtos_ids,
+        "box_nome": (box_nome_input.currentText() or "").strip(),
+        "transportadoras_permitidas": [nome for nome, cb in transportadoras_var.items() if cb.isChecked()],
+    }
+
+    wt = estado.get("worker_thread")
+    if wt is not None and hasattr(wt, "isRunning") and wt.isRunning():
+        print("[⚠️] Uma execução já está em andamento.")
+        return
+
+    estado.setdefault("etapas_finalizadas", {})
+    estado.setdefault("df_planilha_parcial", pd.DataFrame())
+    estado.setdefault("brindes_indisp_set", set())
+    estado.setdefault("embutidos_indisp_set", set())
+    estado.setdefault("linhas_planilha", [])
+    estado.setdefault("mapa_transaction_id_por_linha", {})
+
+    if not isinstance(estado.get("cancelador_global"), threading.Event):
+        estado["cancelador_global"] = threading.Event()
+
+    estado["cancelador_global"].clear()
+    estado["dados_busca"] = dict(dados)  # cópia simples
+
+    print("[🚀 executar_busca_produtos] Enviando para WorkerController...")
+
+    try:
+        controller = WorkerController(dados, estado, skus_info)  # tipos permanecem aceitos
+        estado["worker_controller"] = controller
+        controller.iniciar_worker_signal.emit()
+    except Exception as e:
+        print("[❌ ERRO EM iniciar_worker via sinal]:", e)
+        print(traceback.format_exc())
+        comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Ocorreu um erro ao iniciar a exportação:\n{e!s}")
+
+
+def buscar_transacoes_produtos(
+    dados: Mapping[str, Any],
+    *,
+    atualizar: Callable[[str, int, int], Any] | None = None,
+    cancelador: HasIsSet | None = None,
+    estado: MutableMapping[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:  # ← dict no 3º item
+    print("[🔍 buscar_transacoes_produtos] Início da função")
+
+    transacoes: list[dict[str, Any]] = []
+    if estado is None:
+        estado = {}
+    estado["transacoes_com_erro"] = []
+
+    inicio = dados["inicio"]
+    fim = dados["fim"]
+    produtos_ids: list[str] = [str(pid) for pid in (dados.get("produtos_ids") or []) if pid]
+
+    if not produtos_ids:
+        print("[⚠️] Nenhum produto selecionado para busca.")
+        return [], {}, dict(dados)  # ← CONVERTE
+
+    intervalos = cast(list[tuple[str, str]], dividir_busca_em_periodos(inicio, fim))
+    tarefas: list[tuple[str, str, str]] = [
+        (product_id, ini, fim) for product_id in produtos_ids for (ini, fim) in intervalos
+    ]
+
+    print(f"[📦] Total de tarefas para produtos: {len(tarefas)}")
+
+    if cancelador and cancelador.is_set():
+        if atualizar:
+            atualizar("⛔ Busca cancelada pelo usuário", 1, 1)
+        return [], {}, dict(dados)  # ← CONVERTE
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(buscar_transacoes_com_retry, *args, cancelador=cancelador) for args in tarefas]
+        total_futures = len(futures)
+        concluidos = 0
+
+        while futures:
+            if cancelador and cancelador.is_set():
+                print("[🚫] Cancelado durante busca de produtos.")
+                for f in futures:
+                    f.cancel()
+                return transacoes, {}, dict(dados)  # ← CONVERTE
+
+            done, not_done = wait(futures, timeout=0.5, return_when=FIRST_COMPLETED)
+
+            for future in done:
+                try:
+                    resultado = future.result()
+                    if isinstance(resultado, list):
+                        for item in resultado:
+                            if isinstance(item, dict):
+                                transacoes.append(item)
+                            elif isinstance(item, list):
+                                for subitem in item:
+                                    if isinstance(subitem, dict):
+                                        transacoes.append(subitem)
+                                    else:
+                                        print(f"[⚠️] Ignorado item aninhado não-dict: {type(subitem)}")
+                            else:
+                                print(f"[⚠️] Ignorado item inesperado: {type(item)}")
+                    else:
+                        print(f"[⚠️] Resultado inesperado: {type(resultado)}")
+                except Exception as e:
+                    erro_msg = f"Erro ao buscar transações de produto: {e!s}"
+                    print(f"❌ {erro_msg}")
+                    estado["transacoes_com_erro"].append(erro_msg)
+                concluidos += 1
+                if atualizar:
+                    with suppress(Exception):
+                        atualizar("🔄 Coletando transações de produtos...", concluidos, total_futures)
+
+            futures = list(not_done)
+
+    print(f"[✅ buscar_transacoes_produtos] Finalizado - {len(transacoes)} transações coletadas")
+    return transacoes, {}, dict(dados)
 
 
 def bimestre_do_mes(mes: int) -> int:
@@ -7203,10 +7113,7 @@ def endereco_parece_completo(address1: str) -> bool:
     return any(char.isdigit() for char in partes[1])
 
 
-# ------------------------ UI / FLUXO SHOPIFY ------------------------#
-
-
-def acionar_busca_pedidos_shopify(estado: MutableMapping[str, Any]) -> None:
+def executar_fluxo_loja(estado: MutableMapping[str, Any]) -> None:
     gerenciador: GerenciadorProgresso = GerenciadorProgresso(
         titulo="🔎 Buscando pedidos na Shopify",
         com_percentual=False,
@@ -7216,14 +7123,12 @@ def acionar_busca_pedidos_shopify(estado: MutableMapping[str, Any]) -> None:
     estado["gerenciador_progresso"] = gerenciador
     gerenciador.atualizar("🔄 Buscando pedidos pagos na Shopify...", 0, 0)
 
-    # 🔹 Apenas leitura de UI aqui
     data_inicio: str = estado["entrada_data_inicio"].date().toString("dd/MM/yyyy")
     fulfillment_status: str = estado["combo_status"].currentText()
     produto_alvo: str | None = estado["combo_produto"].currentText() if estado["check_produto"].isChecked() else None
     skus_info: Mapping[str, Any] = estado["skus_info"]
 
-    # 🔹 Delegação para backend
-    preparar_busca_pedidos_shopify(
+    iniciar_todas_as_buscas(
         estado=estado,
         gerenciador=gerenciador,
         data_inicio_str=data_inicio,
@@ -7234,31 +7139,7 @@ def acionar_busca_pedidos_shopify(estado: MutableMapping[str, Any]) -> None:
     )
 
 
-# ------------------------ BACKEND / FLUXO SHOPIFY ------------------------#
-
-
-def preparar_busca_pedidos_shopify(
-    *,
-    estado: MutableMapping[str, Any],
-    gerenciador: GerenciadorProgresso,
-    data_inicio_str: str,
-    produto_alvo: str | None,
-    skus_info: Mapping[str, Any],
-    fulfillment_status: str,
-    depois: Callable[[], None],
-) -> None:
-    executar_busca_pedidos_shopify(
-        estado=estado,
-        gerenciador=gerenciador,
-        data_inicio_str=data_inicio_str,
-        produto_alvo=produto_alvo,
-        skus_info=skus_info,
-        fulfillment_status=fulfillment_status,
-        depois=depois,
-    )
-
-
-def executar_busca_pedidos_shopify(
+def iniciar_todas_as_buscas(
     estado: MutableMapping[str, Any],
     gerenciador: GerenciadorProgresso,
     data_inicio_str: str,
@@ -7267,7 +7148,7 @@ def executar_busca_pedidos_shopify(
     fulfillment_status: str = "any",
     depois: Callable[[], None] | None = None,
 ) -> None:
-    print("[🧪] executar_busca_pedidos_shopify recebeu depois =", depois)
+    print("[🧪] iniciar_todas_as_buscas recebeu depois =", depois)
     logger.info(f"[🧪] Threads ativas no pool: {QThreadPool.globalInstance().activeThreadCount()}")
 
     # Salva o gerenciador original apenas se ainda não existir
@@ -7674,25 +7555,21 @@ def exibir_alerta_revisao(enderecos_normalizados: Mapping[str, Mapping[str, Any]
         )
 
 
-# -----------------BACKEND SHOPIFY -----------------#
-@dataclass(frozen=True)
-class ResultadoProcessamento:
-    df: pd.DataFrame
-    fretes: dict[str, float]
-    status_fulfillment: dict[str, str]
-    descontos: dict[str, float]
-    remaining_totais: dict[str, int]
-    cep_por_pedido: dict[str, str]
-    linhas_adicionadas: int
-
-
-def processar_resultado_pedidos(
-    *,
+def tratar_resultado(
     pedidos: Iterable[Mapping[str, Any]],
     produto_alvo: str | None,
     skus_info: Mapping[str, Mapping[str, Any]],
-    modo_fs: str,
-) -> ResultadoProcessamento:
+    estado: MutableMapping[str, Any],
+    gerenciador: GerenciadorProgresso,
+    depois: Callable[[], None] | None,
+) -> None:
+    print("[🧪] tratar_resultado recebeu depois =", depois)
+    estado["df_temp"] = pd.DataFrame()
+    df_temp: pd.DataFrame = estado.get("df_temp", pd.DataFrame())
+
+    # modo de coleta: "any" (tudo) ou "unfulfilled" (somente pendentes)
+    modo_fs: str = (estado.get("fulfillment_status_selecionado") or "any").strip().lower()
+
     # Filtro por produto específico (se marcado)
     ids_filtrados: set[str] = set()
     if produto_alvo and skus_info:
@@ -7702,20 +7579,14 @@ def processar_resultado_pedidos(
                 ids_filtrados.update(map(str, dados.get("shopify_ids", [])))
 
     linhas_geradas: list[dict[str, Any]] = []
-    fretes: dict[str, float] = {}
-    status_map: dict[str, str] = {}
-    descontos: dict[str, float] = {}
-    remaining_totais: dict[str, int] = {}
-    cep_por_pedido: dict[str, str] = {}
-
     for pedido in pedidos:
-        # --- dados básicos do pedido ---
+        # --- dados básicos do pedido (robustos a None) ---
         cust: Mapping[str, Any] = pedido.get("customer") or {}
         first = (cust.get("firstName") or "").strip()
         last = (cust.get("lastName") or "").strip()
         nome_cliente = f"{first} {last}".strip()
         email: str = cust.get("email") or ""
-        endereco: Mapping[str, Any] = pedido.get("shippingAddress") or {}
+        endereco: Mapping[str, Any] = pedido.get("shippingAddress") or {}  # pode vir None
         telefone: str = endereco.get("phone", "") or ""
         transaction_id: str = str(pedido.get("id") or "").split("/")[-1]
 
@@ -7736,11 +7607,15 @@ def processar_resultado_pedidos(
         except Exception:
             valor_desconto = 0.0
 
-        fretes[transaction_id] = valor_frete
-        status_map[transaction_id] = status_fulfillment
-        descontos[transaction_id] = valor_desconto
+        estado.setdefault("dados_temp", {}).setdefault("fretes", {})[transaction_id] = valor_frete
+        estado.setdefault("dados_temp", {}).setdefault("status_fulfillment", {})[transaction_id] = status_fulfillment
+        estado.setdefault("dados_temp", {}).setdefault("descontos", {})[transaction_id] = valor_desconto
 
-        # --- mapa remainingQuantity por lineItem.id ---
+        print(
+            f"[🧾] Pedido {transaction_id} → Status: {status_fulfillment} | Frete: {valor_frete} | Desconto: {valor_desconto}"
+        )
+
+        # --- mapa remainingQuantity por lineItem.id (a partir de fulfillmentOrders) ---
         remaining_por_line: dict[str, int] = {}
         try:
             fo_edges = (pedido.get("fulfillmentOrders") or {}).get("edges") or []
@@ -7758,10 +7633,14 @@ def processar_resultado_pedidos(
             remaining_por_line = {}
 
         total_remaining_pedido = sum(remaining_por_line.values())
-        remaining_totais[transaction_id] = int(total_remaining_pedido)
+        estado.setdefault("dados_temp", {}).setdefault("remaining_totais", {})[transaction_id] = int(
+            total_remaining_pedido
+        )
 
         # --- CEP por pedido ---
-        cep_por_pedido[transaction_id] = (endereco.get("zip", "") or "").replace("-", "").strip()
+        estado.setdefault("cep_por_pedido", {})[transaction_id] = (
+            (endereco.get("zip", "") or "").replace("-", "").strip()
+        )
 
         # --- processar line items ---
         line_edges = (pedido.get("lineItems") or {}).get("edges", [])
@@ -7775,7 +7654,7 @@ def processar_resultado_pedidos(
             if ids_filtrados and product_id not in ids_filtrados:
                 continue
 
-            # Descobre nome do produto e SKU a partir de skus_info
+            # Descobre nome do produto e SKU a partir do mapeamento do skus.json
             nome_produto = ""
             sku_item = ""
             for nome_local, dados in skus_info.items():
@@ -7804,121 +7683,80 @@ def processar_resultado_pedidos(
             indisponivel_flag = "S" if eh_indisponivel(nome_produto) else "N"
 
             for _ in range(qtd_a_gerar):
-                linhas_geradas.append(
-                    {
-                        "Número pedido": pedido.get("name", ""),
-                        "Nome Comprador": nome_cliente,
-                        "Data Pedido": (pedido.get("createdAt") or "")[:10],
-                        "Data": local_now().strftime("%d/%m/%Y"),
-                        "CPF/CNPJ Comprador": "",
-                        "Endereço Comprador": endereco.get("address1", ""),
-                        "Bairro Comprador": endereco.get("district", ""),
-                        "Número Comprador": endereco.get("number", ""),
-                        "Complemento Comprador": endereco.get("address2", ""),
-                        "CEP Comprador": endereco.get("zip", ""),
-                        "Cidade Comprador": endereco.get("city", ""),
-                        "UF Comprador": endereco.get("provinceCode", ""),
-                        "Telefone Comprador": telefone,
-                        "Celular Comprador": telefone,
-                        "E-mail Comprador": email,
-                        "Produto": nome_produto,
-                        "SKU": sku_item,
-                        "Un": "UN",
-                        "Quantidade": "1",
-                        "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
-                        "Valor Total": f"{valor_unitario:.2f}".replace(".", ","),
-                        "Total Pedido": "",
-                        "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
-                        "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
-                        "Outras despesas": "",
-                        "Nome Entrega": nome_cliente,
-                        "Endereço Entrega": endereco.get("address1", ""),
-                        "Número Entrega": endereco.get("number", ""),
-                        "Complemento Entrega": endereco.get("address2", ""),
-                        "Cidade Entrega": endereco.get("city", ""),
-                        "UF Entrega": endereco.get("provinceCode", ""),
-                        "CEP Entrega": endereco.get("zip", ""),
-                        "Bairro Entrega": endereco.get("district", ""),
-                        "Transportadora": "",
-                        "Serviço": "",
-                        "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
-                        "Observações": "",
-                        "Qtd Parcela": "",
-                        "Data Prevista": "",
-                        "Vendedor": "",
-                        "Forma Pagamento": "",
-                        "ID Forma Pagamento": "",
-                        "transaction_id": transaction_id,
-                        "id_line_item": id_line_item,
-                        "id_produto": product_id,
-                        "indisponivel": indisponivel_flag,
-                        "Precisa Contato": "SIM",
-                    }
-                )
+                linha: dict[str, Any] = {
+                    "Número pedido": pedido.get("name", ""),
+                    "Nome Comprador": nome_cliente,
+                    "Data Pedido": (pedido.get("createdAt") or "")[:10],
+                    "Data": local_now().strftime("%d/%m/%Y"),
+                    "CPF/CNPJ Comprador": "",
+                    "Endereço Comprador": endereco.get("address1", ""),
+                    "Bairro Comprador": endereco.get("district", ""),
+                    "Número Comprador": endereco.get("number", ""),
+                    "Complemento Comprador": endereco.get("address2", ""),
+                    "CEP Comprador": endereco.get("zip", ""),
+                    "Cidade Comprador": endereco.get("city", ""),
+                    "UF Comprador": endereco.get("provinceCode", ""),
+                    "Telefone Comprador": telefone,
+                    "Celular Comprador": telefone,
+                    "E-mail Comprador": email,
+                    "Produto": nome_produto,
+                    "SKU": sku_item,
+                    "Un": "UN",
+                    "Quantidade": "1",
+                    "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
+                    "Valor Total": f"{valor_unitario:.2f}".replace(".", ","),
+                    "Total Pedido": "",
+                    "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
+                    "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
+                    "Outras despesas": "",
+                    "Nome Entrega": nome_cliente,
+                    "Endereço Entrega": endereco.get("address1", ""),
+                    "Número Entrega": endereco.get("number", ""),
+                    "Complemento Entrega": endereco.get("address2", ""),
+                    "Cidade Entrega": endereco.get("city", ""),
+                    "UF Entrega": endereco.get("provinceCode", ""),
+                    "CEP Entrega": endereco.get("zip", ""),
+                    "Bairro Entrega": endereco.get("district", ""),
+                    "Transportadora": "",
+                    "Serviço": "",
+                    "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
+                    "Observações": "",
+                    "Qtd Parcela": "",
+                    "Data Prevista": "",
+                    "Vendedor": "",
+                    "Forma Pagamento": "",
+                    "ID Forma Pagamento": "",
+                    "transaction_id": transaction_id,
+                    "id_line_item": id_line_item,
+                    "id_produto": product_id,
+                    "indisponivel": indisponivel_flag,
+                    "Precisa Contato": "SIM",
+                }
+                linhas_geradas.append(linha)
 
-    df = pd.DataFrame(linhas_geradas) if linhas_geradas else pd.DataFrame()
-    return ResultadoProcessamento(
-        df=df,
-        fretes=fretes,
-        status_fulfillment=status_map,
-        descontos=descontos,
-        remaining_totais=remaining_totais,
-        cep_por_pedido=cep_por_pedido,
-        linhas_adicionadas=len(linhas_geradas),
-    )
-
-
-# ----------------- UI SHOPIFY -----------------#
-
-
-def tratar_resultado(
-    pedidos: Iterable[Mapping[str, Any]],
-    produto_alvo: str | None,
-    skus_info: Mapping[str, Mapping[str, Any]],
-    estado: MutableMapping[str, Any],
-    gerenciador: GerenciadorProgresso,
-    depois: Callable[[], None] | None,
-) -> None:
-    print("[🧪] tratar_resultado recebeu depois =", depois)
-
-    # modo de coleta: "any" (tudo) ou "unfulfilled" (somente pendentes)
-    modo_fs: str = (estado.get("fulfillment_status_selecionado") or "any").strip().lower()
-
-    # --- chama backend puro ---
-    resultado = processar_resultado_pedidos(
-        pedidos=pedidos,
-        produto_alvo=produto_alvo,
-        skus_info=skus_info,
-        modo_fs=modo_fs,
-    )
-
-    # --- integra no estado (UI/orquestração) ---
-    df_temp_atual: pd.DataFrame = estado.get("df_temp", pd.DataFrame())
-    if not df_temp_atual.empty and not resultado.df.empty:
-        estado["df_temp"] = pd.concat([df_temp_atual, resultado.df], ignore_index=True)
+    if linhas_geradas:
+        df_novo = pd.DataFrame(linhas_geradas)
+        df_temp = pd.concat([df_temp, df_novo], ignore_index=True)
+        estado["df_temp"] = df_temp
+        print(f"[✅] {len(linhas_geradas)} itens adicionados ao df_temp.")
+        print(f"[📊] Total atual no df_temp: {len(df_temp)} linhas.")
     else:
-        estado["df_temp"] = resultado.df
+        print("[⚠️] Nenhum item foi adicionado - possivelmente nenhum item corresponde ao filtro.")
 
-    print(f"[✅] {resultado.linhas_adicionadas} itens adicionados ao df_temp.")
-    print(f"[📊] Total atual no df_temp: {len(estado['df_temp'])} linhas.")
-
-    logger.info(f"[✅] {resultado.linhas_adicionadas} itens adicionados ao df_temp.")
+    logger.info(f"[✅] {len(linhas_geradas)} itens adicionados ao df_temp.")
     logger.info(f"[📊] Total atual no df_temp: {len(estado['df_temp'])} linhas.")
 
-    # flags de etapas
     estado["etapas_finalizadas"] = {"cpf": False, "bairro": False, "endereco": False}
     estado["finalizou_cpfs"] = False
     estado["finalizou_bairros"] = False
     estado["finalizou_enderecos"] = False
 
-    # dados extras preservados
-    estado.setdefault("dados_temp", {})["remaining_totais"] = resultado.remaining_totais
-    estado["cep_por_pedido"] = resultado.cep_por_pedido
-    estado["fretes_shopify"] = resultado.fretes.copy()
-    estado["status_fulfillment_shopify"] = resultado.status_fulfillment.copy()
-    estado["descontos_shopify"] = resultado.descontos.copy()
+    # 🆕 Preserva os dados extras após montar df_temp
+    estado["fretes_shopify"] = estado.get("dados_temp", {}).get("fretes", {}).copy()
+    estado["status_fulfillment_shopify"] = estado.get("dados_temp", {}).get("status_fulfillment", {}).copy()
+    estado["descontos_shopify"] = estado.get("dados_temp", {}).get("descontos", {}).copy()
 
-    # UI/progresso
+    logger.info("[🚀] Iniciando fluxo de coleta de CPFs após tratar_resultado.")
     gerenciador.atualizar("📦 Processando transações recebidas...", 0, 0)
     iniciar_busca_cpfs(estado, estado.get("gerenciador_progresso"), depois)
 
@@ -9890,7 +9728,7 @@ def criar_grupo_guru(
     )
 
     btn_buscar_produtos.clicked.connect(
-        lambda: abrir_dialogo_busca_produtos(box_nome_input, transportadoras_var, skus_info, estado)
+        lambda: iniciar_busca_produtos(box_nome_input, transportadoras_var, skus_info, estado)
     )
 
     outer_layout.addWidget(inner_widget)
@@ -9957,7 +9795,7 @@ def criar_grupo_shopify(
     estado["check_produto"] = check_produto
 
     # Conecta ao fluxo externo
-    btn_buscar.clicked.connect(lambda: acionar_busca_pedidos_shopify(estado))
+    btn_buscar.clicked.connect(lambda: executar_fluxo_loja(estado))
     btn_fulfill.clicked.connect(
         lambda: (
             marcar_itens_como_fulfilled_na_shopify(estado.get("df_planilha_exportada"))
