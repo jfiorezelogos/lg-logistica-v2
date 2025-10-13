@@ -27,7 +27,7 @@ from json import JSONDecodeError
 from logging import Logger
 from os import PathLike
 from threading import Event
-from typing import Any, Literal, Optional, Protocol, TypedDict, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, TypedDict, cast, overload
 from zoneinfo import ZoneInfo
 
 import certifi
@@ -40,6 +40,7 @@ from colorama import init
 from dateutil.parser import parse as parse_date
 from fpdf import FPDF
 from openai import RateLimitError
+from PyQt5 import QtCore
 from PyQt5.QtCore import (
     QCoreApplication,
     QDate,
@@ -535,8 +536,8 @@ def iniciar_mapeamento_produtos_guru(
 
                 label = f"{titulo} (id:{market_id})" if market_id else f"{titulo} (id:{product_id})"
                 item = QListWidgetItem(label)
-                item.setData(Qt.UserRole, product_id)  # ID técnico salvo
-                item.setData(Qt.UserRole + 1, market_id)  # informativo
+                item.setData(QtCore.Qt.ItemDataRole.UserRole, product_id)
+                item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, market_id)
                 item.setToolTip(f"marketplace_id: {market_id or '-'}\nproduct_id: {product_id or '-'}")
                 self.lista.addItem(item)
 
@@ -552,7 +553,7 @@ def iniciar_mapeamento_produtos_guru(
                 QMessageBox.warning(self, "Aviso", "Você precisa selecionar ao menos um produto do Guru.")
                 return
 
-            novos_ids: list[str] = [str(it.data(Qt.UserRole) or "").strip() for it in itens]
+            novos_ids: list[str] = [str(it.data(QtCore.Qt.ItemDataRole.UserRole) or "").strip() for it in itens]
             novos_ids = [gid for gid in novos_ids if gid]
 
             is_assinatura = self.radio_assinatura.isChecked()
@@ -800,7 +801,7 @@ class RuleEditorDialog(QDialog):
                     display = f"{(nome_existente or oferta_id)} [{oferta_id}]"
                     self.combo_oferta.addItem(display, oferta_id)
                     idx_of = self.combo_oferta.count() - 1
-                    self.combo_oferta.setItemData(idx_of, nome_existente or "", Qt.UserRole + 1)
+                    self.combo_oferta.setItemData(idx_of, nome_existente or "", int(Qt.UserRole) + 1)
 
                 self.combo_oferta.setCurrentIndex(max(0, idx_of))
 
@@ -1431,12 +1432,12 @@ class GerenciadorProgresso(QObject):
             self.janela: QDialog = QDialog()
             self.janela.setWindowTitle(titulo)
             self.janela.setFixedSize(500, 160)
-            self.janela.setAttribute(Qt.WA_DeleteOnClose, True)
+            self.janela.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
             layout: QVBoxLayout = QVBoxLayout(self.janela)
 
             self.label_status: QLabel = QLabel("Iniciando...")
-            self.label_status.setAlignment(Qt.AlignCenter)
+            self.label_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             layout.addWidget(self.label_status)
 
             self.barra: QProgressBar = QProgressBar()
@@ -1925,17 +1926,25 @@ class CanceladorLike(Protocol):
 
 
 class _CancelamentoFilter(QObject):
-    def __init__(self, cancelador: CanceladorLike, parent: QObject) -> None:
+    def __init__(self, cancelador: Any, parent: QObject | None) -> None:
         super().__init__(parent)
         self._cancelador = cancelador
 
-    def eventFilter(self, _obj: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.Close:
-            # QEvent.Close é sempre QCloseEvent em widgets de janela
-            if hasattr(self._cancelador, "set"):
-                self._cancelador.set()
-            # Não bloqueia o fechamento
+    def eventFilter(self, _obj: QObject | None, event: QEvent | None) -> bool:
+        if event is None:
             return False
+
+        # QEvent.Type.Close é o enum correto nas stubs
+        if event.type() == QEvent.Type.Close:
+            setter = getattr(self._cancelador, "set", None)
+            if callable(setter):
+                try:
+                    setter()
+                except Exception:
+                    pass
+            # não bloqueia o fechamento
+            return False
+
         return False
 
 
@@ -2053,8 +2062,8 @@ class WorkerThreadGuru(QThread):
         self.gerenciador: GerenciadorProgresso = gerenciador
 
         # Mantém Qt.QueuedConnection, mas silencia o stub do PyQt para mypy
-        self.progresso.connect(self.gerenciador.atualizar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
-        self.fechar_ui.connect(self.gerenciador.fechar, type=Qt.QueuedConnection)  # type: ignore[call-arg]
+        self.progresso.connect(self.gerenciador.atualizar, QtCore.Qt.ConnectionType.QueuedConnection)
+        self.fechar_ui.connect(self.gerenciador.fechar, QtCore.Qt.ConnectionType.QueuedConnection)
 
         self._parent_correlation_id = get_correlation_id()
 
@@ -5087,20 +5096,24 @@ def normalizar_order_id(valor: str | int) -> str:
 
 
 class _SinalFinalizacao(Protocol):
-    finalizado: pyqtBoundSignal
+    finalizado: "pyqtBoundSignal"
 
 
 # Classes de Runnable (Executando operações em threads)
 
 
 class SinaisFulfill(QObject):
-    concluido = pyqtSignal(str, int)  # order_id, qtd_itens
-    erro = pyqtSignal(str, str)  # order_id, msg
+    if TYPE_CHECKING:
+        concluido: "pyqtBoundSignal"
+        erro: "pyqtBoundSignal"
+    else:
+        concluido = pyqtSignal(str, int)
+        erro = pyqtSignal(str, str)
 
 
 class _SinaisFulfill(Protocol):
-    concluido: pyqtBoundSignal  # .emit(str, int)
-    erro: pyqtBoundSignal  # .emit(str, str)
+    concluido: "pyqtBoundSignal"  # .emit(str, int)
+    erro: "pyqtBoundSignal"
 
 
 class _FulfillmentOrderLineItem(TypedDict):
@@ -5126,25 +5139,37 @@ class FulfillPedidoRunnable(QRunnable):
             order_gid = f"gid://shopify/Order/{self.order_id}"
             query_fo = """
             query($orderId: ID!) {
-              order(id: $orderId) {
-                fulfillmentOrders(first: 10) {
-                  edges {
-                    node {
-                      id
-                      status
-                      lineItems(first: 50) {
-                        edges {
-                          node {
+                order(id: $orderId) {
+                    fulfillmentOrders(first: 20) {
+                    edges {
+                        node {
                             id
-                            remainingQuantity
-                            lineItem { id }
-                          }
+                            status
+                            requestStatus
+                            supportedActions { action }
+                            fulfillmentHolds {
+                                id
+                                reason
+                                displayReason
+                                reasonNotes
+                                heldByRequestingApp
+                            }
+                            lineItems(first: 50) {
+                                edges {
+                                node {
+                                    id
+                                    remainingQuantity
+                                    totalQuantity
+                                    lineItem { id }
+                                }
+                                }
+                            }
+                            updatedAt
+                            assignedLocation { id name }   # útil p/ erros de location
+                            }
                         }
-                      }
                     }
-                  }
                 }
-              }
             }
             """
 
@@ -5183,26 +5208,56 @@ class FulfillPedidoRunnable(QRunnable):
 
             fulfillment_payloads: list[_FulfillmentByOrder] = []
 
+            # conjunto de lineItem_ids que vieram da planilha
+            planilha_ids: set[str] = set(self.itens_line_ids)
+            encontrados: set[str] = set()
+
             for edge in orders:
                 node = cast(dict[str, Any], edge.get("node") or {})
-                if (node.get("status") or "").upper() != "OPEN":
+
+                status = str(node.get("status") or "").upper()
+                if status in {"CANCELLED", "CLOSED", "ON_HOLD", "INCOMPLETE"}:
+                    print(f"[i] FO {node.get('id')} status={status} — pulando.")
+                    continue
+                if status not in {"OPEN", "IN_PROGRESS"}:
                     continue
 
+                holds_list = cast(list[dict[str, Any]], node.get("fulfillmentHolds") or [])
+                if holds_list:
+                    reasons = [str(h.get("reason") or "") for h in holds_list]
+                    disp = [str(h.get("displayReason") or "") for h in holds_list]
+                    print(
+                        f"[⚠️] FO {node.get('id')} em hold: {', '.join([r for r in reasons if r]) or 'unknown'}; "
+                        f"display={'; '.join([d for d in disp if d]) or '-'} — pulando."
+                    )
+                    continue
+
+                # supportedActions pode vir como lista de objetos {"action": "..."}; se não vier, seguimos em frente
+                sa_raw = node.get("supportedActions")
+                if isinstance(sa_raw, list):
+                    supported = {
+                        str((a or {}).get("action") or "").upper() if isinstance(a, dict) else str(a).upper()
+                        for a in sa_raw
+                    }
+                    if "CREATE_FULFILLMENT" not in supported:
+                        print(f"[i] FO {node.get('id')} sem CREATE_FULFILLMENT (status={status}) — pulando.")
+                        continue
+
                 items: list[_FulfillmentOrderLineItem] = []
-                li_edges = cast(
-                    list[dict[str, Any]],
-                    ((node.get("lineItems") or {}).get("edges") or []),
-                )
+
+                li_edges = cast(list[dict[str, Any]], ((node.get("lineItems") or {}).get("edges") or []))
                 for li in li_edges:
                     li_node = cast(dict[str, Any], li.get("node") or {})
                     line_item_gid = str((li_node.get("lineItem") or {}).get("id", ""))
                     line_item_id = normalizar_order_id(line_item_gid)
                     remaining = int(li_node.get("remainingQuantity") or 0)
 
-                    if line_item_id in self.itens_line_ids and remaining > 0:
+                    if line_item_id in planilha_ids and remaining > 0:
                         items.append({"id": str(li_node.get("id", "")), "quantity": remaining})
+                        encontrados.add(line_item_id)
                     else:
-                        print(f"[🔍] Ignorado: lineItem.id = {line_item_id}, restante = {remaining}")
+                        # mantém visibilidade do porquê não entrou
+                        print(f"[🔍] Ignorado: lineItem.id={line_item_id}, restante={remaining}")
 
                 if items:
                     fulfillment_payloads.append(
@@ -5212,8 +5267,13 @@ class FulfillPedidoRunnable(QRunnable):
                         }
                     )
 
+            # Se nada entrou, reporte claramente os que faltaram e não tente mutation
             if not fulfillment_payloads:
-                self.signals.erro.emit(self.order_id, "Nada a enviar")
+                faltaram = sorted(planilha_ids - encontrados)
+                msg = "Nada a enviar"
+                if faltaram:
+                    msg += f" (IDs sem remaining ou não encontrados: {', '.join(faltaram[:10])}{'…' if len(faltaram)>10 else ''})"
+                self.signals.erro.emit(self.order_id, msg)
                 return
 
             # 2) Criar fulfillment
@@ -6041,7 +6101,10 @@ def iniciar_busca_bairros(
 
 
 class FinalizarNormalizacaoSignal(QObject):
-    finalizado = pyqtSignal()
+    if TYPE_CHECKING:
+        finalizado: "pyqtBoundSignal"  # o mypy enxerga bound
+    else:
+        finalizado = pyqtSignal(str, dict)  # runtime
 
 
 def iniciar_normalizacao_enderecos(
@@ -6120,18 +6183,22 @@ def iniciar_normalizacao_enderecos(
         if estado["cancelador_global"].is_set():
             logger.info("[🛑] Cancelamento detectado durante o disparo de normalizações de endereço.")
             break
+
         pedido_id = normalizar_order_id(str(linha["transaction_id"]))
         endereco_raw = "" if pd.isna(linha["Endereço Entrega"]) else str(linha["Endereço Entrega"])
         complemento_raw = "" if pd.isna(linha.get("Complemento Entrega")) else str(linha.get("Complemento Entrega"))
+
         runnable = NormalizarEndereco(
             pedido_id,
             endereco_raw,
             complemento_raw,
             lambda pid, dados: ao_finalizar_endereco(str(pid), dict(dados), estado, gerenciador, depois),
-            sinal_finalizacao=FinalizarNormalizacaoSignal(),
+            sinal_finalizacao=cast(_SinalFinalizacao, FinalizarNormalizacaoSignal()),
             estado=estado,
         )
-        pool.start(runnable)
+
+        _pool = pool or QThreadPool.globalInstance()
+        _pool.start(runnable)
 
     estado["verificador_endereco"] = VerificadorDeEtapa(
         estado=estado,
@@ -7574,8 +7641,8 @@ def mapear_produtos_shopify(
 
             for e in candidatos:
                 it = QListWidgetItem(e["display"])
-                it.setData(Qt.UserRole, e["id"])
-                it.setData(Qt.UserRole + 1, e.get("sku", ""))
+                it.setData(QtCore.Qt.ItemDataRole.UserRole, e["id"])
+                it.setData(QtCore.Qt.ItemDataRole.UserRole + 1, e.get("sku", ""))
                 self.lista.addItem(it)
 
         # ---------- salvar ----------
@@ -7595,7 +7662,7 @@ def mapear_produtos_shopify(
 
             ids_sel: list[str] = []
             for it in itens:
-                val = str(it.data(Qt.UserRole) or "").strip()
+                val = str(it.data(int(Qt.UserRole)) or "").strip()
                 if val:
                     ids_sel.append(val)
 
@@ -9079,7 +9146,7 @@ def criar_grupo_guru(
 ) -> QGroupBox:
     group = QGroupBox("Digital Manager Guru")
     group.setObjectName("grupo_guru")
-    group.setAttribute(Qt.WA_StyledBackground, True)
+    group.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
 
     outer_layout = QVBoxLayout(group)
     inner_widget = QWidget()
@@ -9214,7 +9281,7 @@ def criar_grupo_shopify(
 ) -> QGroupBox:
     group = QGroupBox("🛒 Shopify")
     group.setObjectName("grupo_shopify")
-    group.setAttribute(Qt.WA_StyledBackground, True)
+    group.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
 
     outer_layout = QVBoxLayout(group)
     inner_widget = QWidget()
@@ -9287,7 +9354,7 @@ def criar_grupo_fretes(
 ) -> QGroupBox:
     group = QGroupBox("🚚 Cotação de Fretes")
     group.setObjectName("grupo_fretes")
-    group.setAttribute(Qt.WA_StyledBackground, True)
+    group.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
 
     outer_layout = QVBoxLayout(group)
 
@@ -9319,7 +9386,7 @@ def criar_grupo_fretes(
 def criar_grupo_controle(estado: MutableMapping[str, Any]) -> QGroupBox:
     group = QGroupBox("📋 Controle e Registro")
     group.setObjectName("grupo_exportacao")
-    group.setAttribute(Qt.WA_StyledBackground, True)
+    group.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
 
     outer_layout = QVBoxLayout(group)
 

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging  # [prof]
+
+# === adições no topo ===
+import os  # [prof]
 import random
 import time
 from functools import lru_cache
@@ -10,6 +14,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .errors import ExternalError
+
+# [prof] flag para ligar/desligar telemetria via env (sem mudar chamadas)
+_HTTP_PROF = os.getenv("HTTP_CLIENT_PROF", "0") in ("1", "true", "True")
+_log = logging.getLogger(__name__)
 
 # (connect, read) em segundos — pode ser sobrescrito em cada chamada
 DEFAULT_TIMEOUT: tuple[int, int] = (5, 30)
@@ -89,22 +97,46 @@ def get_session(session: requests.Session | None = None) -> requests.Session:
 
 
 def http_get(url: str, **kwargs: Any) -> requests.Response:
-    """GET com timeout padrão, retries exponenciais (inclui 429/5xx), e tradução de erros para
-    ExternalError."""
+    """GET com timeout padrão, retries exponenciais (inclui 429/5xx), e tradução de erros para ExternalError."""
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     session: requests.Session = kwargs.pop("session", get_session())
     jitter_max: float = kwargs.pop("jitter_max", 0.0)
 
     if jitter_max and jitter_max > 0:
-
         time.sleep(random.uniform(0, jitter_max))
 
+    # telemetria opcional (não quebra se não existir)
+    _prof_enabled = bool(globals().get("_HTTP_PROF", False))
+    _logger = globals().get("_log", None)
+
+    t0 = time.perf_counter()
     try:
         res = session.get(url, timeout=timeout, **kwargs)
+
+        if _prof_enabled and _logger:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            hdr = getattr(res, "headers", {}) or {}
+            _logger.error(
+                "http_prof",
+                extra={
+                    "method": "GET",
+                    "url": url,
+                    "status": getattr(res, "status_code", None),
+                    "elapsed_ms": elapsed_ms,
+                    "size_bytes": len(res.content) if getattr(res, "content", None) is not None else None,
+                    "shopify_limit": hdr.get("X-Shopify-Shop-Api-Call-Limit"),
+                    "retry_after": hdr.get("Retry-After"),
+                    "cf_ray": hdr.get("cf-ray") or hdr.get("CF-RAY"),
+                    "ce": hdr.get("Content-Encoding"),
+                },
+            )
+
         res.raise_for_status()
         return res
 
     except requests.Timeout as e:
+        if _prof_enabled and _logger:
+            _logger.error("http_prof_timeout", extra={"method": "GET", "url": url})
         raise ExternalError(
             f"Timeout ao chamar {url}",
             code="HTTP_TIMEOUT",
@@ -114,18 +146,29 @@ def http_get(url: str, **kwargs: Any) -> requests.Response:
         ) from e
 
     except requests.HTTPError as e:
+        if _prof_enabled and _logger:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            status_code = getattr(e.response, "status_code", None)
+            _logger.error(
+                "http_prof_http_error",
+                extra={"method": "GET", "url": url, "status": status_code, "elapsed_ms": elapsed_ms},
+            )
+
         raw_status: Any = getattr(e.response, "status_code", None)
-        status: int | None = raw_status if isinstance(raw_status, int) else None
-        retryable = bool(status in TRANSIENT_STATUSES)
+        status_: int | None = raw_status if isinstance(raw_status, int) else None
+        retryable = bool(status_ in TRANSIENT_STATUSES)
         raise ExternalError(
-            f"Falha HTTP {status} ao chamar {url}",
+            f"Falha HTTP {status_} ao chamar {url}",
             code="HTTP_ERROR",
             cause=e,
             retryable=retryable,
-            data={"url": url, "status": status, "text": getattr(e.response, "text", None)},
+            data={"url": url, "status": status_, "text": getattr(e.response, "text", None)},
         ) from e
 
     except requests.RequestException as e:
+        if _prof_enabled and _logger:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            _logger.error("http_prof_req_error", extra={"method": "GET", "url": url, "elapsed_ms": elapsed_ms})
         raise ExternalError(
             f"Erro de rede ao chamar {url}",
             code="HTTP_REQUEST_ERROR",
@@ -136,22 +179,46 @@ def http_get(url: str, **kwargs: Any) -> requests.Response:
 
 
 def http_post(url: str, **kwargs: Any) -> requests.Response:
-    """POST com timeout padrão, retries (inclui 429/5xx, respeita Retry-After), e tradução de erros
-    para ExternalError."""
+    """POST com timeout padrão, retries (inclui 429/5xx, respeita Retry-After), e tradução de erros para ExternalError."""
     timeout = kwargs.pop("timeout", DEFAULT_TIMEOUT)
     session: requests.Session = kwargs.pop("session", get_session())
     jitter_max: float = kwargs.pop("jitter_max", 0.0)
 
     if jitter_max and jitter_max > 0:
-
         time.sleep(random.uniform(0, jitter_max))
 
+    # telemetria opcional (não quebra se não existir)
+    _prof_enabled = bool(globals().get("_HTTP_PROF", False))
+    _logger = globals().get("_log", None)
+
+    t0 = time.perf_counter()
     try:
         res = session.post(url, timeout=timeout, **kwargs)
+
+        if _prof_enabled and _logger:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            hdr = getattr(res, "headers", {}) or {}
+            _logger.error(
+                "http_prof",
+                extra={
+                    "method": "POST",
+                    "url": url,
+                    "status": getattr(res, "status_code", None),
+                    "elapsed_ms": elapsed_ms,
+                    "size_bytes": len(res.content) if getattr(res, "content", None) is not None else None,
+                    "shopify_limit": hdr.get("X-Shopify-Shop-Api-Call-Limit"),
+                    "retry_after": hdr.get("Retry-After"),
+                    "cf_ray": hdr.get("cf-ray") or hdr.get("CF-RAY"),
+                    "ce": hdr.get("Content-Encoding"),
+                },
+            )
+
         res.raise_for_status()
         return res
 
     except requests.Timeout as e:
+        if _prof_enabled and _logger:
+            _logger.error("http_prof_timeout", extra={"method": "POST", "url": url})
         raise ExternalError(
             f"Timeout ao chamar {url}",
             code="HTTP_TIMEOUT",
@@ -161,18 +228,38 @@ def http_post(url: str, **kwargs: Any) -> requests.Response:
         ) from e
 
     except requests.HTTPError as e:
+        if _prof_enabled and _logger:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            status_code = getattr(e.response, "status_code", None)
+            _logger.error(
+                "http_prof_http_error",
+                extra={
+                    "method": "POST",
+                    "url": url,
+                    "status": status_code,
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+
         raw_status: Any = getattr(e.response, "status_code", None)
-        status: int | None = raw_status if isinstance(raw_status, int) else None
-        retryable = bool(status in TRANSIENT_STATUSES)
+        status_: int | None = raw_status if isinstance(raw_status, int) else None
+        retryable = bool(status_ in TRANSIENT_STATUSES)
         raise ExternalError(
-            f"Falha HTTP {status} ao chamar {url}",
+            f"Falha HTTP {status_} ao chamar {url}",
             code="HTTP_ERROR",
             cause=e,
             retryable=retryable,
-            data={"url": url, "status": status, "text": getattr(e.response, "text", None)},
+            data={
+                "url": url,
+                "status": status_,
+                "text": getattr(e.response, "text", None),
+            },
         ) from e
 
     except requests.RequestException as e:
+        if _prof_enabled and _logger:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            _logger.error("http_prof_req_error", extra={"method": "POST", "url": url, "elapsed_ms": elapsed_ms})
         raise ExternalError(
             f"Erro de rede ao chamar {url}",
             code="HTTP_REQUEST_ERROR",

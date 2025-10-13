@@ -209,7 +209,7 @@
         "composto_de": [],
         "indisponivel": true
     },
-    "Assinatura Anual (mensal)": {
+    "Assinatura Anual (mensal) - mensal": {
         "tipo": "assinatura",
         "recorrencia": "anual",
         "periodicidade": "mensal",
@@ -223,7 +223,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Anual (bimestral)": {
+    "Assinatura Anual (bimestral) - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "anual",
         "periodicidade": "bimestral",
@@ -237,7 +237,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 2 anos (bimestral)": {
+    "Assinatura 2 anos (bimestral) - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "bianual",
         "periodicidade": "bimestral",
@@ -251,7 +251,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 2 anos (mensal)": {
+    "Assinatura 2 anos (mensal) - mensal": {
         "tipo": "assinatura",
         "recorrencia": "bianual",
         "periodicidade": "mensal",
@@ -265,7 +265,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 3 anos (bimestral)": {
+    "Assinatura 3 anos (bimestral) - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "trianual",
         "periodicidade": "bimestral",
@@ -279,7 +279,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura 3 anos (mensal)": {
+    "Assinatura 3 anos (mensal) - mensal": {
         "tipo": "assinatura",
         "recorrencia": "trianual",
         "periodicidade": "mensal",
@@ -293,7 +293,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Bimestral (bimestral)": {
+    "Assinatura Bimestral (bimestral) - bimestral": {
         "tipo": "assinatura",
         "recorrencia": "bimestral",
         "periodicidade": "bimestral",
@@ -307,7 +307,7 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Mensal (mensal)": {
+    "Assinatura Mensal (mensal) - mensal": {
         "tipo": "assinatura",
         "recorrencia": "mensal",
         "periodicidade": "mensal",
@@ -377,7 +377,11 @@
         "guru_ids": [
             "9fd522b3-c35f-4784-8e79-c5892a33a30c"
         ],
-        "shopify_ids": [],
+        "shopify_ids": [
+            8581984256190,
+            8582032294078,
+            8582034817214
+        ],
         "indisponivel": true
     }
 }

@@ -54,7 +54,7 @@ warn_return_any = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["backend", "frontend"]
+module = ["backend", "frontend", "reportlab.*"]
 disallow_untyped_defs = false
 warn_return_any = false
 ignore_missing_imports = true
