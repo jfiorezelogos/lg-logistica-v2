@@ -321,17 +321,6 @@
         "peso": 0.0,
         "indisponivel": false
     },
-    "Assinatura Semestral - mensal": {
-        "tipo": "assinatura",
-        "recorrencia": "semestral",
-        "periodicidade": "mensal",
-        "guru_ids": [],
-        "shopify_ids": [],
-        "composto_de": [],
-        "sku": "",
-        "peso": 0.0,
-        "indisponivel": false
-    },
     "Aristóteles - Obras Completas": {
         "sku": "C003A",
         "peso": 0.0,
@@ -406,6 +395,18 @@
         "guru_ids": [
             "a01d8454-ec2b-478a-ac08-46dec3b915f8",
             "a01d8517-ec73-4472-b299-f7cc0fd8f0d0"
+        ]
+    },
+    "Assinatura Semestral - mensal (mensal)": {
+        "tipo": "assinatura",
+        "recorrencia": "semestral",
+        "periodicidade": "mensal",
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false,
+        "composto_de": [],
+        "guru_ids": [
+            "a0044351-60e6-4fe1-9613-e36980c7ad69"
         ]
     }
 }
