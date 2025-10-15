@@ -38,6 +38,7 @@ import urllib3
 from brazilcep import exceptions, get_address_from_cep
 from colorama import init
 from dateutil.parser import parse as parse_date
+from dateutil.relativedelta import relativedelta
 from fpdf import FPDF
 from openai import RateLimitError
 from PyQt5 import QtCore
@@ -387,6 +388,198 @@ def coletar_produtos_guru() -> list[dict[str, Any]]:
     return produtos
 
 
+def esta_no_ultimo_mes(
+    ordered_at: datetime | None,
+    duracao_meses: int | None,
+    *,
+    referencia: datetime | None = None,
+) -> bool:
+    """
+    Janela do último mês (via TRANSACTIONS):
+      [ordered_at + duracao_meses - 30d, ordered_at + duracao_meses]
+    """
+    if not ordered_at or not duracao_meses or duracao_meses <= 0:
+        return False
+
+    # referência timezone-aware em UTC (corrige DTZ003)
+    if referencia is None:
+        referencia = datetime.now(UTC)  # <- em <3.11: datetime.now(UTC)
+    elif referencia.tzinfo is None:
+        referencia = referencia.replace(tzinfo=UTC)
+
+    # normaliza ordered_at para UTC-aware
+    if ordered_at.tzinfo is None:
+        ordered_at = ordered_at.replace(tzinfo=UTC)
+    else:
+        ordered_at = ordered_at.astimezone(UTC)
+
+    data_fim = ordered_at + relativedelta(months=duracao_meses)
+    janela_ini = data_fim - timedelta(days=30)
+    return janela_ini <= referencia <= data_fim
+
+
+def fetch_all_subscriptions() -> list[dict]:
+    """Coleta todas as assinaturas do Guru, com paginação, aceitando Response ou dict."""
+    headers = {
+        "Authorization": f"Bearer {settings.API_KEY_GURU}",
+        "Content-Type": "application/json",
+    }
+
+    page = 1
+    out: list[dict] = []
+
+    while True:
+        url = f"{BASE_URL_GURU}/subscriptions?page={page}"
+        resp = http_get(url, headers=headers)  # pode ser Response OU dict
+
+        # --- normaliza para dict JSON ---
+        try:
+            if isinstance(resp, dict):
+                data = resp
+            else:
+                # tenta .json() (Response do requests)
+                data = resp.json()
+        except Exception:
+            data = {}
+
+        # diferentes formatos possíveis
+        items = data.get("data") or data.get("items") or data.get("subscriptions") or []
+
+        # caso venha aninhado: {"data":{"subscriptions":[...]}} ou similar
+        if isinstance(items, dict):
+            items = items.get("subscriptions") or items.get("items") or items.get("data") or []
+
+        if not isinstance(items, list):
+            items = []
+
+        # acumula
+        out.extend(items)
+
+        # tentamos descobrir se há próxima página
+        meta = data.get("meta") or {}
+        links = data.get("links") or {}
+        next_page = meta.get("next_page") or meta.get("next") or links.get("next")
+
+        # heurística de paginação simples: se não há next e a página atual trouxe poucos/zero itens, paramos
+        if not next_page:
+            break
+
+        # se vier número, usa; se vier URL, apenas incrementa
+        try:
+            page = int(next_page)
+        except Exception:
+            page += 1
+
+        # segurança extra: se a página atual não trouxe nada, paramos
+        if not items:
+            break
+
+    return out
+
+
+# ----------------- Mapeamentos auxiliares -----------------
+
+_DUR_LABEL_TO_MONTHS: dict[str, int] = {
+    # duração (rotulo → meses)
+    "mensal": 1,
+    "bimestral": 2,
+    "semestral": 6,  # adição do usuário
+    "anual": 12,
+    "18meses": 18,  # adição do usuário
+    "bianual": 24,
+    "trianual": 36,
+}
+
+
+def duration_label_to_months(label: str | None) -> int | None:
+    if not label:
+        return None
+    return _DUR_LABEL_TO_MONTHS.get(label.strip().lower())
+
+
+def periodicidade_normaliza(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    s = raw.strip().lower()
+    if s in {"mensal", "bimestral"}:
+        return s
+    return None  # evita ruídos
+
+
+def resolve_plano_por_product_id(
+    product_id: str,
+    skus_info: Mapping[str, Mapping[str, Any]],
+) -> tuple[int | None, str | None]:
+    """
+    Retorna (duracao_em_meses, periodicidade) com base no product_id usando o skus.json.
+    Aceita rótulos 'mensal','bimestral','semestral','anual','18meses','bianual','trianual'.
+    """
+    for _nome, info in skus_info.items():
+        try:
+            guru_ids = info.get("guru_ids") or []
+            if str(product_id) in [str(g).strip() for g in guru_ids]:
+                # duração pode estar como rótulo ou número/meses
+                dur_label = (
+                    (info.get("duracao") or info.get("duração") or info.get("duration_label") or "").strip().lower()
+                )
+                dur_num = info.get("duracao_meses") or info.get("duration_months")
+                per = (info.get("periodicidade") or info.get("periodicidade_envio") or "").strip().lower()
+
+                dur_meses = None
+                if isinstance(dur_num, int) and dur_num > 0:
+                    dur_meses = dur_num
+                elif dur_label:
+                    dur_meses = duration_label_to_months(dur_label)
+
+                per_norm = periodicidade_normaliza(per)
+                return (dur_meses, per_norm)
+        except Exception:
+            pass
+    return (None, None)
+
+
+# ----------------- Índices de subscriptions -----------------
+
+
+def build_subscriptions_index(
+    subscriptions: list[dict[str, Any]],
+    skus_info: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """
+    Retorna dict por subscription_code:
+      {
+        subscription_code: {
+          "active": bool,
+          "product_id": str,
+          "product_name": str,
+          "duracao_meses": int | None,
+          "periodicidade": "mensal" | "bimestral" | None
+        }
+      }
+    """
+    idx: dict[str, dict[str, Any]] = {}
+    for item in subscriptions:
+        data = item.get("data") or item  # robusto a formatos
+        code = str(data.get("subscription_code") or data.get("code") or "").strip()
+        if not code:
+            continue
+        last_status = str(data.get("last_status") or "").strip().lower()
+        prod = data.get("product") or {}
+        prod_id = str(prod.get("id") or "").strip()
+        prod_name = str(prod.get("name") or "").strip()
+
+        dur_meses, per = resolve_plano_por_product_id(prod_id, skus_info)
+
+        idx[code] = {
+            "active": last_status == "active",
+            "product_id": prod_id,
+            "product_name": prod_name,
+            "duracao_meses": dur_meses,
+            "periodicidade": per,
+        }
+    return idx
+
+
 def mapear_assinaturas(
     skus_info: Mapping[str, Mapping[str, Any]],
 ) -> tuple[dict[str, list[str]], dict[str, dict[str, str]]]:
@@ -416,7 +609,7 @@ def mapear_assinaturas(
 
 
 def iniciar_mapeamento_produtos_guru(
-    skus_info: Mapping[str, MutableMapping[str, Any]],  # ← antes era MutableMapping[…]
+    skus_info: Mapping[str, MutableMapping[str, Any]],
     produtos_guru: Sequence[Mapping[str, Any]] | None,
     skus_path: str,
 ) -> None:
@@ -559,16 +752,44 @@ def iniciar_mapeamento_produtos_guru(
             novos_ids = [gid for gid in novos_ids if gid]
 
             is_assinatura = self.radio_assinatura.isChecked()
+
+            # ---- normalizadores auxiliares ----
+            DUR_LABEL_TO_MONTHS = {
+                "mensal": 1,
+                "bimestral": 2,
+                "semestral": 6,
+                "anual": 12,
+                "18meses": 18,
+                "bianual": 24,
+                "trianual": 36,
+            }
+            PERIODS_OK = {"mensal", "bimestral"}
+
             if is_assinatura:
-                duracao = self.combo_duracao.currentText().strip().lower()
-                periodicidade = self.combo_periodicidade.currentText().strip().lower()
-                if not periodicidade:
-                    QMessageBox.warning(self, "Aviso", "Selecione a periodicidade da assinatura.")
+                # coleta UI
+                duracao_lbl = (self.combo_duracao.currentText() or "").strip().lower()
+                periodicidade = (self.combo_periodicidade.currentText() or "").strip().lower()
+
+                # validações simples
+                if periodicidade not in PERIODS_OK:
+                    QMessageBox.warning(self, "Aviso", "Periodicidade inválida. Selecione 'mensal' ou 'bimestral'.")
                     return
-                nome_base = re.sub(r"\s*\((mensal|bimestral)\)\s*$", "", nome_base_raw, flags=re.IGNORECASE).strip()
+                if duracao_lbl not in DUR_LABEL_TO_MONTHS:
+                    QMessageBox.warning(self, "Aviso", f"Duração inválida: {duracao_lbl}")
+                    return
+
+                # saneia nome base: remove sufixos repetidos de periodicidade no fim
+                nome_base = re.sub(
+                    r"(?:\s*(?:\((?:mensal|bimestral)\)|-\s*(?:mensal|bimestral)))+$",
+                    "",
+                    nome_base_raw,
+                    flags=re.IGNORECASE,
+                ).strip()
+
+                # chave final padronizada
                 dest_key = f"{nome_base} ({periodicidade})"
             else:
-                duracao = None
+                duracao_lbl = None
                 periodicidade = None
                 dest_key = nome_base_raw
 
@@ -590,8 +811,9 @@ def iniciar_mapeamento_produtos_guru(
             entrada = cast(MutableMapping[str, Any], self.skus_info.setdefault(dest_key, {}))
             if is_assinatura:
                 entrada["tipo"] = "assinatura"
-                entrada["recorrencia"] = duracao
-                entrada["periodicidade"] = periodicidade
+                entrada["recorrencia"] = duracao_lbl
+                entrada["duracao_meses"] = DUR_LABEL_TO_MONTHS[duracao_lbl]  # numérico p/ regra do último mês
+                entrada["periodicidade"] = periodicidade  # "mensal" | "bimestral"
                 entrada.setdefault("sku", "")
                 entrada.setdefault("peso", 0.0)
                 entrada.setdefault("composto_de", [])
@@ -601,6 +823,7 @@ def iniciar_mapeamento_produtos_guru(
                 else:
                     entrada["tipo"] = "produto"
                 entrada.pop("recorrencia", None)
+                entrada.pop("duracao_meses", None)
                 entrada.pop("periodicidade", None)
 
             entrada.setdefault("guru_ids", [])
@@ -2663,6 +2886,10 @@ def iniciar_busca_assinaturas(
         "modo_periodo": (modo_periodo or "").strip().upper(),  # "PERÍODO" | "TODAS"
     }
 
+    _subs_raw = fetch_all_subscriptions()
+    subs_idx = build_subscriptions_index(_subs_raw, skus_info)
+    estado["subscriptions_idx"] = subs_idx
+
     # guarda contexto p/ outras partes da UI
     estado["contexto_busca_assinaturas"] = dados
     estado["skus_info"] = cast(Mapping[str, Mapping[str, Any]], skus_info)
@@ -2692,47 +2919,125 @@ def mapear_periodicidade_assinaturas(
     skus_info: Mapping[str, Mapping[str, Any]],
     periodicidade_sel: str,
 ) -> dict[str, list[str]]:
-    """Retorna dict com listas de product_ids (Guru) das assinaturas filtradas pela periodicidade
-    ('mensal' | 'bimestral').
-
-    Keys: 'anuais', 'bianuais', 'trianuais', 'bimestrais', 'mensais', 'todos'
     """
-    periodicidade_sel = (periodicidade_sel or "").strip().lower()
-    mapa_tipo: dict[str, str] = {
-        "18meses": "18meses",
-        "semestral": "semestrais",
-        "anual": "anuais",
-        "bianual": "bianuais",
-        "trianual": "trianuais",
-        "bimestral": "bimestrais",
-        "mensal": "mensais",
-    }
+    Retorna dict com listas de product_ids (Guru) das ASSINATURAS filtradas pela periodicidade ('mensal'|'bimestral').
 
-    ids_por_tipo: dict[str, list[str]] = {k: [] for k in ["anuais", "bianuais", "trianuais", "bimestrais", "mensais"]}
+    Chaves de saída (por DURAÇÃO):
+      'mensais' (1m), 'bimestrais' (2m), 'semestrais' (6m), 'anuais' (12m), '18meses' (18m), 'bianuais' (24m), 'trianuais' (36m),
+      e 'todos' (conjunto de todos os IDs).
+
+    Observação:
+      - 'periodicidade' (mensal | bimestral) é critério de filtro.
+      - 'recorrencia'/'duracao'/'duracao_meses' determinam a DURAÇÃO (bucket de saída).
+    """
+    # normaliza periodicidade de filtro
+    periodicidade_sel = (periodicidade_sel or "").strip().lower()
+    if periodicidade_sel not in {"mensal", "bimestral"}:
+        # mantém comportamento antigo: se vier algo fora, não filtra (ou defina um default se preferir)
+        periodicidade_sel = periodicidade_sel or ""
+
+    # buckets de saída inicializados
+    ids_por_tipo: dict[str, list[str]] = {
+        "mensais": [],
+        "bimestrais": [],
+        "semestrais": [],
+        "anuais": [],
+        "18meses": [],
+        "bianuais": [],
+        "trianuais": [],
+    }
     todos: set[str] = set()
 
+    def _inferir_periodicidade(info: Mapping[str, Any]) -> str:
+        # 1) explícito no SKU
+        per = str(info.get("periodicidade") or info.get("periodicidade_envio") or "").strip().lower()
+        # duração não é periodicidade; se veio "semestral", "18meses", etc., ignore
+        if per not in {"mensal", "bimestral"}:
+            per = ""
+
+        # 2) fallback por marketplace_id (ex.: ...-MES / ...-BIM)
+        if not per:
+            mp = str(info.get("marketplace_id") or info.get("marketplace") or "").strip().upper()
+            if mp.endswith("-MES"):
+                per = "mensal"
+            elif mp.endswith("-BIM"):
+                per = "bimestral"
+
+        # 3) se ainda vazio, você pode definir default (opcional). Aqui não forçamos.
+        return per
+
+    def _bucket_duracao(info: Mapping[str, Any]) -> str | None:
+        # pode vir como número:
+        dur_num = info.get("duracao_meses") or info.get("duration_months")
+        if isinstance(dur_num, int | float) and dur_num > 0:
+            m = int(dur_num)
+            return {
+                1: "mensais",
+                2: "bimestrais",
+                6: "semestrais",
+                12: "anuais",
+                18: "18meses",
+                24: "bianuais",
+                36: "trianuais",
+            }.get(m, None)
+
+        # ...ou como rótulo/texto:
+        dur_label = (
+            str(
+                info.get("recorrencia")
+                or info.get("duracao")
+                or info.get("duração")
+                or info.get("duration_label")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+        mapa_tipo = {
+            "mensal": "mensais",
+            "bimestral": "bimestrais",
+            "semestral": "semestrais",
+            "anual": "anuais",
+            "18meses": "18meses",
+            "bianual": "bianuais",
+            "trianual": "trianuais",
+        }
+        return mapa_tipo.get(dur_label)
+
     for _nome, info in skus_info.items():
-        if str(info.get("tipo", "")).lower() != "assinatura":
-            continue
-        if str(info.get("periodicidade", "")).lower() != periodicidade_sel:
-            continue
+        try:
+            if str(info.get("tipo", "")).strip().lower() != "assinatura":
+                continue
 
-        duracao = str(info.get("recorrencia", "")).lower()
-        chave_tipo = mapa_tipo.get(duracao)
-        if not chave_tipo:
-            continue
+            # filtro por periodicidade (se fornecido)
+            per = _inferir_periodicidade(info)
+            if periodicidade_sel and per != periodicidade_sel:
+                continue
 
-        guru_ids: Sequence[Any] = cast(Sequence[Any], info.get("guru_ids", []))
-        for gid in guru_ids:
-            gid_str = str(gid).strip()
-            if gid_str:
-                ids_por_tipo[chave_tipo].append(gid_str)
+            bucket = _bucket_duracao(info)
+            if not bucket:
+                # sem bucket de duração -> ignora (ou escolha um default, se fizer sentido)
+                continue
+
+            guru_ids = info.get("guru_ids") or []
+            for gid in guru_ids:
+                gid_str = str(gid).strip()
+                if not gid_str:
+                    continue
+                # evita KeyError e já agrupa
+                ids_por_tipo.setdefault(bucket, []).append(gid_str)
                 todos.add(gid_str)
+        except Exception:
+            # não deixa 1 SKU ruim derrubar o mapeamento inteiro
+            continue
 
-    # dedup
-    for k in list(ids_por_tipo.keys()):
-        ids_por_tipo[k] = list(dict.fromkeys(ids_por_tipo[k]))
+    # dedup e "todos"
+    for k, v in list(ids_por_tipo.items()):
+        # mantém a ordem de primeira ocorrência
+        ids_por_tipo[k] = list(dict.fromkeys(v))
     ids_por_tipo["todos"] = list(todos)
+
     return ids_por_tipo
 
 
@@ -3386,6 +3691,9 @@ def montar_planilha_vendas_guru(
                 if sid:
                     transacoes_por_assinatura[sid].append(trans)
 
+        # Índice vindo de iniciar_busca_assinaturas()
+        subs_idx = estado.get("subscriptions_idx", {}) or {}
+
         total_assinaturas = len(transacoes_por_assinatura)
         for i, (subscription_id, grupo_transacoes) in enumerate(transacoes_por_assinatura.items()):
             if cancelador.is_set():
@@ -3435,6 +3743,29 @@ def montar_planilha_vendas_guru(
             if "offer" not in transacao["product"] and product_base.get("offer"):
                 transacao["product"]["offer"] = product_base["offer"]
 
+            # --- REGRAS DE /subscriptions ---
+            info_sub = subs_idx.get(str(subscription_id))
+            if info_sub:
+                ativo = bool(info_sub.get("active"))
+                dur_meses = info_sub.get("duracao_meses")  # ex.: 1,2,6,12,18,24,36
+                periodicidade_sub = (
+                    (info_sub.get("periodicidade") or "").strip().lower()
+                )  # "mensal"/"bimestral" (ou "semestral" se mapeado)
+
+                # ordered_at de referência para janela do último mês
+                ordered_at_ref = safe_parse_date(transacao_base)
+
+                # Se NÃO estiver ativa, só deixamos passar se estiver no último mês do ciclo
+                if not ativo and not esta_no_ultimo_mes(ordered_at_ref, dur_meses):
+                    print(
+                        f"[WORKER] SKIP inativa fora do último mês (transactions): sid={subscription_id} dur={dur_meses} ordered_at={ordered_at_ref}"
+                    )
+                    continue
+
+                # Se o /subscriptions trouxe periodicidade, persistimos na transação
+                if periodicidade_sub:
+                    transacao["periodicidade"] = periodicidade_sub  # fica disponível para cálculos seguintes
+
             try:
                 print(
                     f"[DEBUG calcular_valores_pedidos] subscription_id={subscription_id} transacao_id={transacao.get('id')} ordered_at={transacao.get('ordered_at')} created_at={transacao.get('created_at')}"
@@ -3456,6 +3787,10 @@ def montar_planilha_vendas_guru(
                     or ""
                 )
                 periodicidade_atual = str(periodicidade_atual).strip().lower()
+
+                # prevalece o que veio do /subscriptions, se existir
+                if info_sub and str(info_sub.get("periodicidade") or "").strip():
+                    periodicidade_atual = str(info_sub["periodicidade"]).strip().lower()
 
                 data_fim_periodo = dados.get("ordered_at_end_periodo")
                 data_pedido = valores["data_pedido"]
@@ -3490,6 +3825,13 @@ def montar_planilha_vendas_guru(
                 linha["indisponivel"] = _flag_indisp(
                     nome_produto_principal, skus_info.get(nome_produto_principal, {}).get("sku", "")
                 )
+
+                # (opcional) guardar duração em meses detectada via /subscriptions
+                if info_sub and info_sub.get("duracao_meses"):
+                    try:
+                        linha["duracao_meses"] = int(info_sub["duracao_meses"])  # ex.: 18
+                    except Exception:
+                        pass
 
                 # período
                 def calcular_periodo(periodicidade: str, data_ref: datetime) -> int | str:
