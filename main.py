@@ -2699,6 +2699,8 @@ def mapear_periodicidade_assinaturas(
     """
     periodicidade_sel = (periodicidade_sel or "").strip().lower()
     mapa_tipo: dict[str, str] = {
+        "18meses": "18meses",
+        "semestral": "semestrais",
         "anual": "anuais",
         "bianual": "bianuais",
         "trianual": "trianuais",
@@ -3711,7 +3713,7 @@ def aplicar_regras_assinaturas(
         if not lista:
             return True, 0
 
-        tokens_genericos = {"anual", "2 anos", "3 anos", "mensal", "bimestral"}
+        tokens_genericos = {"semestral", "18meses", "anual", "2 anos", "3 anos", "mensal", "bimestral"}
         best = -1
         casou = False
         alvo_concat = " ".join(sorted(labels_alvo))
@@ -4363,6 +4365,10 @@ def importar_planilha_pedidos_guru() -> None:
             return "bianuais"
         if "anual" in s:
             return "anuais"
+        if "18 meses" in s:
+            return "18meses"
+        if "semestral" in s:
+            return "semestrais"
         if "bimestral" in s:
             return "bimestrais"
         if "mensal" in s:
@@ -4377,6 +4383,8 @@ def importar_planilha_pedidos_guru() -> None:
         ("bianuais", "bimestral"): 960,
         ("trianuais", "mensal"): 2880,
         ("trianuais", "bimestral"): 1440,
+        ("18meses", "mensal"): 1440,
+        ("semestrais", "mensal"): 480,
     }
 
     def divisor_para(tipo_assinatura: str, periodicidade: str) -> int:
@@ -4386,8 +4394,12 @@ def importar_planilha_pedidos_guru() -> None:
             return 36 if per == "mensal" else 18
         if ta == "bianuais":
             return 24 if per == "mensal" else 12
+        if ta == "18meses":
+            return 18 if per == "mensal" else 9
         if ta == "anuais":
             return 12 if per == "mensal" else 6
+        if ta == "semestrais":
+            return 6 if per == "mensal" else 3
         if ta == "bimestrais":
             return 2 if per == "mensal" else 1
         if ta == "mensais":
