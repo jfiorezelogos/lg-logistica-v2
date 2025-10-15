@@ -1,3 +1,5 @@
+from __future__ import annotations  # <- PRIMEIRA LINHA
+
 # Imports da biblioteca padrão
 import argparse
 import calendar
@@ -26,10 +28,12 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import JSONDecodeError
 from logging import Logger
 from os import PathLike
+from pathlib import Path  # (mantenha só aqui)
 from threading import Event
-from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, TypedDict, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast, overload
 from zoneinfo import ZoneInfo
 
+# Terceiros
 import certifi
 import openai
 import pandas as pd
@@ -94,12 +98,26 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from unidecode import unidecode
 
+# Seus módulos
 from common.cli_safe import safe_cli
+
+# Bootstrap de config (sem input_path)
+from common.config_bootstrap import AppConfig, load_config, load_env
 from common.errors import ExternalError, UserError
 from common.http_client import http_get, http_post
-from common.logging_setup import get_correlation_id, set_correlation_id, setup_logging
+from common.logging_setup import get_correlation_id, set_correlation_id
+from common.paths import app_root, default_log_file, user_data_dir_path
 from common.settings import settings
 from common.validation import ensure_paths, validate_config
+
+# 1) carrega variáveis de ambiente (.env se existir)
+load_env()
+
+# 2) carrega config (sem input_path) e resolve output_dir
+CFG: AppConfig
+CFG, CFG_PATH = load_config()
+logger = logging.getLogger(__name__)
+logger.info("config carregada", extra={"config_path": str(CFG_PATH), "output_dir": CFG.get("output_dir")})
 
 init(autoreset=True)
 
@@ -147,22 +165,6 @@ comunicador_global.mostrar_mensagem.connect(slot_mostrar_mensagem)
 # --------------------- BACKEND/PATH ----------------------
 
 
-def caminho_base() -> str:
-    """Diretório onde está o main.py (independe do cwd)."""
-    return os.path.dirname(os.path.abspath(__file__))
-
-
-# --------------------- LOGGER ----------------------------
-
-logger = logging.getLogger(__name__)
-
-setup_logging(
-    level=logging.INFO,
-    json_console=True,
-    file_path=os.path.join(os.getcwd(), "sistema.log"),
-)
-set_correlation_id()
-
 dados: dict[str, Any] = {}
 
 
@@ -186,21 +188,31 @@ transportadoras_var: dict[str, Any] = {}
 transportadoras_lista = ["CORREIOS", "GFL", "GOL", "JET", "LOG"]
 
 # -------------------------------BACKEND / SKUS--------------------------------
-skus_path = os.path.join(caminho_base(), "skus.json")
+SKUS_FILENAME = "skus.json"
 
-if os.path.exists(skus_path):
-    with open(skus_path, encoding="utf-8") as f:
-        skus_info = json.load(f)
+# 1) caminho do usuário (Windows: %LOCALAPPDATA%\lg-logistica\) — via common.paths
+skus_path = user_data_dir_path() / SKUS_FILENAME
+
+# 2) se ainda não existir, tentar "semear" a partir de um skus.json que venha no app (somente leitura)
+seed_path = app_root() / SKUS_FILENAME  # se você versionar um skus.json "padrão" dentro do projeto
+
+if skus_path.exists():
+    skus_info = json.loads(Path(skus_path).read_text(encoding="utf-8"))
 else:
-    skus_info = {
-        "Leviatã, de Thomas Hobbes": {"sku": "L002A", "peso": 1.10},
-        "O Príncipe, Maquiavél": {"sku": "B002A", "peso": 0.70},
-        "Isagoge, de Porfírio": {"sku": "B001A", "peso": 0.70},
-        "Virgílio, o Pai do Ocidente": {"sku": "L001A", "peso": 0.50},
-        "Heráclito": {"sku": "B003A", "peso": 0.70},
-    }
-    with open(skus_path, "w", encoding="utf-8") as f:
-        json.dump(skus_info, f, indent=4, ensure_ascii=False)
+    if seed_path.exists():
+        # copia o seed para a área do usuário
+        skus_path.write_bytes(seed_path.read_bytes())
+        skus_info = json.loads(Path(skus_path).read_text(encoding="utf-8"))
+    else:
+        # cria um default mínimo e salva no diretório do usuário
+        skus_info = {
+            "Leviatã, de Thomas Hobbes": {"sku": "L002A", "peso": 1.10},
+            "O Príncipe, Maquiavél": {"sku": "B002A", "peso": 0.70},
+            "Isagoge, de Porfírio": {"sku": "B001A", "peso": 0.70},
+            "Virgílio, o Pai do Ocidente": {"sku": "L001A", "peso": 0.50},
+            "Heráclito": {"sku": "B003A", "peso": 0.70},
+        }
+        Path(skus_path).write_text(json.dumps(skus_info, indent=4, ensure_ascii=False), encoding="utf-8")
 
 # Helpers datetime
 TZ_APP = ZoneInfo("America/Sao_Paulo")
@@ -1623,7 +1635,7 @@ def iniciar_gerenciador_regras(
 
 
 # helper opcional para usar no timeout
-def with_suppress_close(gerenciador: "GerenciadorProgresso") -> None:
+def with_suppress_close(gerenciador: GerenciadorProgresso) -> None:
     with suppress(Exception):
         gerenciador.fechar()
 
@@ -3114,6 +3126,11 @@ def gerenciar_coleta_vendas_assinaturas(
         ini = max(ini, LIMITE_INFERIOR)
         return cast(list[tuple[str, str]], dividir_periodos_coleta_api_guru(ini, end_sel))
 
+    def _janela_multi_meses(n_meses: int) -> list[tuple[str, str]]:
+        ini = (inicio_base - relativedelta(months=n_meses)).replace(day=1)
+        ini = max(ini, LIMITE_INFERIOR)
+        return cast(list[tuple[str, str]], dividir_periodos_coleta_api_guru(ini, end_sel))
+
     # ================= Modo do período (PERÍODO vs TODAS) =================
     try:
         modo_sel_norm = unidecode((dados.get("modo_periodo") or "").strip().upper())
@@ -3123,14 +3140,18 @@ def gerenciar_coleta_vendas_assinaturas(
 
     if modo_sel_norm == "PERIODO":
         # FIX (1): só o mês/bimestre selecionado
-        intervalos_anuais = dividir_periodos_coleta_api_guru(ini_sel, end_sel)
-        intervalos_bianuais = dividir_periodos_coleta_api_guru(ini_sel, end_sel)
-        intervalos_trianuais = dividir_periodos_coleta_api_guru(ini_sel, end_sel)
+        base_intervalos = dividir_periodos_coleta_api_guru(ini_sel, end_sel)
+        intervalos_anuais = base_intervalos
+        intervalos_bianuais = base_intervalos
+        intervalos_trianuais = base_intervalos
+        intervalos_semestrais = base_intervalos
+
     else:
         # TODAS: janelas de 1, 2 e 3 anos retroativas
         intervalos_anuais = _janela_multi_ano(1)
         intervalos_bianuais = _janela_multi_ano(2)
         intervalos_trianuais = _janela_multi_ano(3)
+        intervalos_semestrais = _janela_multi_meses(6)
 
     # ================= Executor =================
 
@@ -3180,18 +3201,22 @@ def gerenciar_coleta_vendas_assinaturas(
     # ================= Tarefas (AGREGADAS) =================
     todas_tarefas: list[tuple[str, str, str, str]] = []
 
-    print("[1️⃣] Gerando tarefas para anuais...")
-    t: list[tuple[str, str, str, str]] = [
-        (pid, ini, fim, "anuais") for pid in ids_map.get("anuais", []) for (ini, fim) in intervalos_anuais
-    ]
+    print("[1.2️⃣] Gerando tarefas para trianuais...")
+    t = [(pid, ini, fim, "trianuais") for pid in ids_map.get("trianuais", []) for (ini, fim) in intervalos_trianuais]
     todas_tarefas.extend(t)
 
     print("[1.1️⃣] Gerando tarefas para bianuais...")
     t = [(pid, ini, fim, "bianuais") for pid in ids_map.get("bianuais", []) for (ini, fim) in intervalos_bianuais]
     todas_tarefas.extend(t)
 
-    print("[1.2️⃣] Gerando tarefas para trianuais...")
-    t = [(pid, ini, fim, "trianuais") for pid in ids_map.get("trianuais", []) for (ini, fim) in intervalos_trianuais]
+    print("[1️⃣] Gerando tarefas para anuais...")
+    t: list[tuple[str, str, str, str]] = [
+        (pid, ini, fim, "anuais") for pid in ids_map.get("anuais", []) for (ini, fim) in intervalos_anuais
+    ]
+    todas_tarefas.extend(t)
+
+    print("[1.05️⃣] Gerando tarefas para semestrais...")
+    t = [(pid, ini, fim, "semestrais") for pid in ids_map.get("semestrais", []) for (ini, fim) in intervalos_semestrais]
     todas_tarefas.extend(t)
 
     print("[2️⃣] Gerando tarefas para bimestrais...]")
@@ -3483,7 +3508,7 @@ def montar_planilha_vendas_guru(
         raise ValueError(f"'cancelador' inválido: {cancelador}")
 
     # contagem consistente em TODO retorno
-    tipos = ["anuais", "bimestrais", "bianuais", "trianuais", "mensais"]
+    tipos = ["mensais", "bimestrais", "semestrais", "anuais", "bianuais", "trianuais"]
     contagem = {tipo: {"assinaturas": 0, "embutidos": 0, "cupons": 0} for tipo in tipos}
 
     if cancelador.is_set():
@@ -4025,7 +4050,11 @@ def aplicar_regras_assinaturas(
         # "Assinatura 2 anos (bimestral)", "Assinatura 3 anos (mensal)",
         # "Assinatura Anual (bimestral)", "Assinatura Bimestral (bimestral)"
         base: list[str] = []
-        if tipo == "bianuais":
+        if tipo == "semestrais":
+            base.append("Assinatura Semestral")
+        elif tipo == "18meses":
+            base.append("Assinatura 18 Meses")
+        elif tipo == "bianuais":
             base.append("Assinatura 2 anos")
         elif tipo == "trianuais":
             base.append("Assinatura 3 anos")
@@ -4436,8 +4465,12 @@ def calcular_valores_pedidos(
         divisor = 36 if periodicidade == "mensal" else 18
     elif tipo_assinatura == "bianuais":
         divisor = 24 if periodicidade == "mensal" else 12
+    elif tipo_assinatura == "18meses":
+        divisor = 18 if periodicidade == "mensal" else 9
     elif tipo_assinatura == "anuais":
         divisor = 12 if periodicidade == "mensal" else 6
+    elif tipo_assinatura == "semestrais":
+        divisor = 6 if periodicidade == "mensal" else 3
     elif tipo_assinatura == "bimestrais":
         divisor = 2 if periodicidade == "mensal" else 1
     elif tipo_assinatura == "mensais":
@@ -5458,7 +5491,7 @@ def normalizar_order_id(valor: str | int) -> str:
 
 
 class _SinalFinalizacao(Protocol):
-    finalizado: "pyqtBoundSignal"
+    finalizado: pyqtBoundSignal
 
 
 # Classes de Runnable (Executando operações em threads)
@@ -5466,16 +5499,16 @@ class _SinalFinalizacao(Protocol):
 
 class SinaisFulfill(QObject):
     if TYPE_CHECKING:
-        concluido: "pyqtBoundSignal"
-        erro: "pyqtBoundSignal"
+        concluido: pyqtBoundSignal
+        erro: pyqtBoundSignal
     else:
         concluido = pyqtSignal(str, int)
         erro = pyqtSignal(str, str)
 
 
 class _SinaisFulfill(Protocol):
-    concluido: "pyqtBoundSignal"  # .emit(str, int)
-    erro: "pyqtBoundSignal"
+    concluido: pyqtBoundSignal  # .emit(str, int)
+    erro: pyqtBoundSignal
 
 
 class _FulfillmentOrderLineItem(TypedDict):
@@ -6181,7 +6214,7 @@ class ObterCpfShopifyRunnable(QRunnable):
 
 def iniciar_busca_cpfs(
     estado: MutableMapping[str, Any],
-    gerenciador: Optional["GerenciadorProgresso"],
+    gerenciador: GerenciadorProgresso | None,
     depois: Callable[[], None] | None = None,
 ) -> None:
     df_any = estado.get("df_temp")
@@ -6359,7 +6392,7 @@ class BuscarBairroRunnable(QRunnable):
 
 def iniciar_busca_bairros(
     estado: MutableMapping[str, Any],
-    gerenciador: Optional["GerenciadorProgresso"],
+    gerenciador: GerenciadorProgresso | None,
     depois: Callable[[], None] | None = None,
 ) -> None:
     df_any = estado.get("df_temp")
@@ -6464,7 +6497,7 @@ def iniciar_busca_bairros(
 
 class FinalizarNormalizacaoSignal(QObject):
     if TYPE_CHECKING:
-        finalizado: "pyqtBoundSignal"  # o mypy enxerga bound
+        finalizado: pyqtBoundSignal  # o mypy enxerga bound
     else:
         finalizado = pyqtSignal(str, dict)  # runtime
 
@@ -9927,9 +9960,24 @@ def abrir_interface(
 
 
 def run_gui() -> int:
-    # ativa JSON no console e também loga no arquivo existente
-    setup_logging(level=logging.INFO, json_console=True, file_path=os.path.join(caminho_base(), "sistema.log"))
-    set_correlation_id()  # gera um id para essa execução
+    """
+    Inicializa a interface gráfica garantindo logging e correlation_id.
+    Usa o mesmo arquivo de log configurado globalmente (%LOCALAPPDATA%\\lg-logistica\\Logs\\sistema.log).
+    """
+    logger = logging.getLogger("gui")
+
+    # Se o logging ainda não foi configurado (fallback)
+    if not logger.handlers:
+        from common.logging_setup import setup_logging
+
+        log_file = default_log_file()
+        setup_logging(level=logging.INFO, json_console=True, file_path=str(log_file))
+        logger.info("logging inicializado manualmente (fallback)", extra={"log_file": str(log_file)})
+
+    # Gera um id único por execução (para rastreamento no log)
+    set_correlation_id()
+
+    logger.info("abrindo interface gráfica")
     abrir_interface(estado, skus_info)
     return 0
 
@@ -9981,10 +10029,11 @@ def _load_payload_from_arg(value: str) -> dict[Any, Any]:
 
 @safe_cli
 def main(argv: list[str] | None = None) -> int:
-    """Entry point F-I-N-O com tratamento de erros padronizado pelo cli_safe.
+    """
+    Entry point com tratamento de erros padronizado pelo @safe_cli.
 
-    - Modo padrão: GUI
-    - Modo CLI: valida entrada e executa orquestração (quando existir)
+    - GUI (padrão): abre a interface
+    - CLI: recebe JSON inline ou arquivo .json com a configuração
     """
 
     parser = argparse.ArgumentParser(
@@ -10009,14 +10058,19 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    # inicia logging e correlation id
-    setup_logging(level=logging.INFO, json_console=True, file_path=os.path.join(caminho_base(), "sistema.log"))
+    # apenas gera um correlation_id (logging já é configurado via sitecustomize)
+    from common.logging_setup import set_correlation_id
+
     set_correlation_id()
 
+    logger = logging.getLogger("main")
+    logger.info("modo de execução", extra={"mode": args.mode})
+
+    # ------------------ GUI ------------------
     if args.mode == "gui":
         return run_gui()
 
-    # --- CLI ---
+    # ------------------ CLI ------------------
     if not args.config:
         raise UserError(
             "Uso (CLI): --mode cli --config '<json>' | --config caminho/para/config.json",
@@ -10027,12 +10081,15 @@ def main(argv: list[str] | None = None) -> int:
     cfg = validate_config(payload)
     ensure_paths(cfg)
 
-    # caso você já tenha um orquestrador (vamos criar no Passo 3/4):
+    # log básico confirmando config válida
+    logger.info("config CLI validada", extra={"output_dir": cfg.output_dir})
+
+    # placeholder: executar orquestrador, se existir
     # from app.runner import run_from_cfg
     # return int(run_from_cfg(cfg) or 0)
 
-    # provisório: confirme a entrada válida e retorne sucesso
-    print(f"OK (CLI): {cfg.input_path} -> {cfg.output_dir} (dry_run={cfg.dry_run})")
+    # provisório: apenas confirmar
+    print(f"OK (CLI): output_dir={cfg.output_dir} (dry_run={cfg.dry_run})")
     return 0
 
 

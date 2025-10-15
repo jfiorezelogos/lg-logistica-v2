@@ -5,6 +5,7 @@ target-version = ["py313"]
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+extend-exclude = ["stubs"]
 
 [tool.ruff.lint]
 # Regras ativas (equilíbrio entre signal/ruído)
@@ -25,19 +26,14 @@ select = [
   "E741",  # variáveis com nomes confusos
   "RUF013" # Optional implícito
 ]
-# Black decide a quebra de linha; ignoramos E501
+# Black decide a quebra de linha; ignoramos E203/E501
 ignore = ["E203", "E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"main.py" = [
-  "PLR" # refatorações de complexidade (por ora)
-]
-"backend.py" = [
-  "PLR" # idem
-]
-"frontend.py" = [
-  "PLR" # idem
-]
+"main.py" = ["PLR"]
+"backend.py" = ["PLR"]
+"frontend.py" = ["PLR"]
+"stubs/**/*.pyi" = ["ALL"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "src", "common"]
@@ -52,6 +48,11 @@ explicit_package_bases = true
 disallow_untyped_defs = true
 warn_return_any = true
 warn_unused_ignores = true
+# Aponta para stubs locais (ex.: platformdirs)
+mypy_path = "stubs"
+
+# Se você quiser rodar o mypy sempre com o Python do venv, descomente:
+# python_executable = ".venv\\Scripts\\python.exe"
 
 [[tool.mypy.overrides]]
 module = ["backend", "frontend", "reportlab.*"]

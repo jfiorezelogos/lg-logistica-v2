@@ -43,3 +43,5 @@ requests-mock==1.12.1
 types-requests==2.32.0.20240914
 pydantic==2.9.2
 pydantic-settings==2.4.0
+platformdirs>=4.2
+types-platformdirs>=4.0.0.0
