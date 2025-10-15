@@ -394,6 +394,7 @@ def mapear_assinaturas(
         "mensal": [],
         "bimestral": [],
         "anual": [],
+        "18meses": [],
         "bianual": [],
         "trianual": [],
     }
@@ -464,7 +465,7 @@ def iniciar_mapeamento_produtos_guru(
             self.widget_assinatura = QWidget()
             linha_assin: QHBoxLayout = QHBoxLayout(self.widget_assinatura)
             self.combo_duracao = QComboBox()
-            self.combo_duracao.addItems(["mensal", "bimestral", "anual", "bianual", "trianual"])
+            self.combo_duracao.addItems(["mensal", "bimestral", "anual", "18meses", "bianual", "trianual"])
             linha_assin.addWidget(QLabel("Duração do plano:"))
             linha_assin.addWidget(self.combo_duracao)
 
@@ -1554,6 +1555,7 @@ ASSINATURAS, GURU_META = mapear_assinaturas(skus_info)
 ASSINATURAS_MENSAIS = ASSINATURAS.get("mensal", [])
 ASSINATURAS_BIMESTRAIS = ASSINATURAS.get("bimestral", [])
 ASSINATURAS_ANUAIS = ASSINATURAS.get("anual", [])
+ASSINATURAS_18MESES = ASSINATURAS.get("18meses", [])
 ASSINATURAS_BIANUAIS = ASSINATURAS.get("bianual", [])
 ASSINATURAS_TRIANUAIS = ASSINATURAS.get("trianual", [])
 
@@ -1861,6 +1863,7 @@ def exibir_resumo_coleta_guru(
             ("mensais", ["mensais", "mensal"]),
             ("bimestrais", ["bimestrais", "bimestral"]),
             ("anuais", ["anuais", "anual"]),
+            ("18meses", ["18meses", "18meses"]),
             ("bianuais", ["bianuais", "bianual"]),
             ("trianuais", ["trianuais", "trianual"]),
         ]
@@ -3186,6 +3189,7 @@ def montar_planilha_vendas_guru(
             return t
         aliases = {
             "anual": "anuais",
+            "18meses": "18meses",
             "bianual": "bianuais",
             "trianual": "trianuais",
             "bimestral": "bimestrais",
