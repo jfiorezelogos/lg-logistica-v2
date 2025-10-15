@@ -1,0 +1,1675 @@
+{
+  "rules": [
+    {
+      "id": "096cbc59-e184-4b5a-a8f6-10847b262928",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "ANTIGOS"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "8f3aaa4b-820a-4d2a-a2b4-40b01551d0a9",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "ANTIGOS"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "98c6f877-d2e6-4f0b-ac34-9d6e115350cf",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Thomas Reid"
+      },
+      "cupom": {
+        "nome": "THOMASREID"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "12424cf8-f2f1-44f6-ab3e-a57e1116fbd9",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "ELTONCDF"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "fc919700-663d-444a-b506-1509ae6c366b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Heráclito"
+      },
+      "cupom": {
+        "nome": "MOVIMENTO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (mensal)",
+        "Assinatura Anual (bimestral)"
+      ]
+    },
+    {
+      "id": "3f65d576-76d4-4c18-bb6b-84e65362c5f6",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Isagoge"
+      },
+      "cupom": {
+        "nome": "ELTONCDF"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "c6464c17-09d6-44b6-a857-320897c848fc",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Heráclito"
+      },
+      "cupom": {
+        "nome": "MOVIMENTO"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "19c5bafa-e869-40dc-8b9a-97a63bb8643d",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "MODERNA"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "c995f60c-1e03-42e2-9949-b4e7f3d60490",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "MAQUIAVELICO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "9a4ee083-09b9-49d1-a8b9-600ccedbc978",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "O Príncipe"
+      },
+      "cupom": {
+        "nome": "MAQUIAVELICO"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "75e8bf4e-8693-41b0-9acf-32d41a315a98",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "O Príncipe"
+      },
+      "cupom": {
+        "nome": "POLITICO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "61609e46-8d70-423a-912b-3e188a51dec2",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "cupom": {
+        "nome": "POLITICO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "ba665850-938f-4da5-9c3a-f03c0e166a7b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Virgílio"
+        ]
+      },
+      "cupom": {
+        "nome": "VIRGILIO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "3f171e7a-fa93-4fe3-8d3e-fdac61e23480",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Virgílio"
+      },
+      "cupom": {
+        "nome": "VIRGILIO"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "bd73d819-2734-42a5-916e-c9a206ee432b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Heráclito"
+      },
+      "cupom": {
+        "nome": "DIALETICO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "96e5fc2f-575b-4f10-87a9-14efecd14f5e",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Heráclito"
+      },
+      "cupom": {
+        "nome": "DIALETICO"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "d6e4246d-d3b0-410d-8dcf-f8480f33165d",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "ISAGOGE"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "2239be53-b6b6-445c-99e5-b3a7bcea4afb",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Isagoge"
+      },
+      "cupom": {
+        "nome": "ISAGOGE"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "d44edc65-ffce-4d34-8279-e1d08ce81503",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "PROIBIDO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "ed397f21-c21f-405a-a0dd-10f8a4a9e736",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "VOLCAN"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "5e2c7aab-369f-42b2-ba7a-ff1e798a588f",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "EDMILSON"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "8fee4b64-638c-4f48-843d-4a3bce0675cf",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "cupom": {
+        "nome": "MARIZE"
+      },
+      "assinaturas": [
+        "Assinatura Anual (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 2 anos (bimestral)"
+      ]
+    },
+    {
+      "id": "f262cb50-c3ec-40b2-b3ce-58c4f6f10bb6",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "EXCLUSIVO1"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "d9ab8f3b-5c4e-4d5f-a5da-1822393589bb",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "JUAN15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "5daf7e42-8c09-4aea-8e12-9db336cf2b86",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Heráclito"
+        ]
+      },
+      "cupom": {
+        "nome": "THIAGO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "46add29b-834c-4ca8-ac84-6bf7505d908b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Virgílio"
+        ]
+      },
+      "cupom": {
+        "nome": "RAISSA15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "4aede67d-8107-458e-b0dd-ca0220f32969",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "ANGELA15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "f28a7be5-e961-47fc-a369-e9de48e760b7",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "RAPOSO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "20d336e1-539f-4859-9854-1072638dc25e",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "GIOVANNI15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "d4649fa5-9a73-40d0-bf4b-f553238eab9a",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Heráclito"
+        ]
+      },
+      "cupom": {
+        "nome": "DAI15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "94dcad62-542b-4c36-ab1e-bc3984700177",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Heráclito"
+        ]
+      },
+      "cupom": {
+        "nome": "KIM15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "0d7be4ea-dca8-4c77-ae87-dca4d07ae6be",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "ANDRE15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "d44301dc-8d77-44c3-9c91-3cba5d5fa9bf",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "RICARDO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "5bc3452f-178c-41d1-8cb6-47437ec69a72",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "PINAGE15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "1dfe18e8-d587-4371-af84-f3f717ed57da",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "GREGORIO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "04d96568-e690-42a0-8da8-479326a2d2fb",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "cupom": {
+        "nome": "NICK15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "30bd5abc-2ac6-4e63-a64b-c5e2b69ee82b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "HUMBERTO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "0d050d5e-83f1-4707-964c-5e8b6ce4784a",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "cupom": {
+        "nome": "PHILIPE15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "c3c98862-0b8b-407c-a319-a67cd680b8a5",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "JULIA15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "f02e7e36-b1b7-461e-a0ad-6395147ffb53",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Heráclito"
+      },
+      "cupom": {
+        "nome": "OBSCURO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "22ed58f7-2474-4310-95ca-abea29f67a15",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Heráclito"
+      },
+      "cupom": {
+        "nome": "OBSCURO"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "dcc3d71d-9e67-497f-bb65-7fdb6c6fc676",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "LUANA15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "071c001f-ee2d-4055-8a66-7847905f29ac",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "BELLA15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "50f6c09b-2fb6-4d8f-ab15-ff8b30857397",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "REVINTELECTUAL"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "363403c9-4ddb-4404-9bbc-3fac636e7755",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega",
+          "Thomas Reid"
+        ]
+      },
+      "cupom": {
+        "nome": "3NOPRIMEIROMES"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "e15302c5-ddb7-48a2-b727-b21434b418d6",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "ASSINANTEZH"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "1ead483a-c40c-4ec6-a571-ca8685623a9d",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9d5e71d8-b13f-4e51-83ee-52d94d6c5d3b",
+        "oferta_id": "9ec07e0e-76eb-41b8-9f18-6991bb716518",
+        "nome": "Anual + OB Aurora"
+      }
+    },
+    {
+      "id": "7f8ec73b-4621-429c-98bd-a2e54caab866",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Todas obras lançadas"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9d5e71d8-b13f-4e51-83ee-52d94d6c5d3b",
+        "oferta_id": "9ed8af5e-b393-45f1-ae02-be620cea3f2d",
+        "nome": "Anual + Combo 6 boxes"
+      }
+    },
+    {
+      "id": "32dc9526-5f18-4ab6-91a5-0cf30d0e8a9c",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Virgílio"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9d5e71d8-b13f-4e51-83ee-52d94d6c5d3b",
+        "oferta_id": "9dc226dc-5d2a-423a-b113-8102e1d885b8",
+        "nome": "Assinatura Anual + Virgílio"
+      }
+    },
+    {
+      "id": "f4eaf22f-42e1-4e2c-bb3f-65e5fda53831",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9d5e71d8-b13f-4e51-83ee-52d94d6c5d3b",
+        "oferta_id": "9ec09442-f239-4a47-b6a8-c9b8dad3f508",
+        "nome": "Plano Anual + Aurora + Frete"
+      }
+    },
+    {
+      "id": "dd896058-24d1-419d-ad91-1a4dc579f44f",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9dc32bf1-bb0f-4d27-b172-c8841ae6d2f0",
+        "oferta_id": "9e31c003-60d2-4353-9f87-78fb8f2a7997",
+        "nome": "Assinatura Anual  + Leviatã"
+      }
+    },
+    {
+      "id": "3bf10e99-e554-4aea-9d89-16c0b05f5623",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9dc32bf1-bb0f-4d27-b172-c8841ae6d2f0",
+        "oferta_id": "9ebf1c11-fc1c-434d-8c41-64aec972c534",
+        "nome": "Assinatura Anual + A Aurora da Filosofia Grega"
+      }
+    },
+    {
+      "id": "2fd41703-c9d1-493a-9aff-d6f9728e6be4",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9dc32bf1-bb0f-4d27-b172-c8841ae6d2f0",
+        "oferta_id": "9ebf1e32-bb62-4895-bb7a-167847e8a270",
+        "nome": "Assinatura Anual + A Aurora da Filosofia Grega  (Cópia)"
+      }
+    },
+    {
+      "id": "a39e54b4-64e3-4bb4-863e-c13769f7946a",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9dc32bf1-bb0f-4d27-b172-c8841ae6d2f0",
+        "oferta_id": "9e346403-b10d-47ff-8a40-4d16f4f2d9b5",
+        "nome": "Assinatura Anual + Leviatã Bilíngue"
+      }
+    },
+    {
+      "id": "9d4e1e0e-ebfb-4b31-b300-618f2b3d260c",
+      "applies_to": "oferta",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "oferta": {
+        "produto_id": "9dc32bf1-bb0f-4d27-b172-c8841ae6d2f0",
+        "oferta_id": "9e53faaf-2726-4708-a45f-0d461ae8e309",
+        "nome": "Assinatura Anual + Leviatã Bilíngue (Preço Março)"
+      }
+    },
+    {
+      "id": "e4b9be7f-6112-4244-a77c-e9f0cebc838d",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "cupom": {
+        "nome": "AURORA10"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "c317c792-0a90-4084-adf9-b9fe80bcc235",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Aurora da Filosofia Grega"
+      },
+      "cupom": {
+        "nome": "AURORA10"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "899847af-5877-45c1-bc2c-4b432a9de168",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "ANDRE15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "597b7a1f-14c3-4569-8d16-32165336315b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Gênio do Cristianismo"
+        ]
+      },
+      "cupom": {
+        "nome": "CHATEAU"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "729a3365-88fe-4d16-8f59-7c838d12cb45",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Heráclito"
+        ]
+      },
+      "cupom": {
+        "nome": "GREGOS"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "6ff64892-efc9-44be-ad17-00dc2987a585",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "BERNARDO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "895d3014-a6ed-46fc-a944-b6ea0d0d1834",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "cupom": {
+        "nome": "PHILIPE15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "9cf96d93-af61-4d19-bf4f-cc42cd375c3c",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "FABIO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "0cfb5ef6-d9cc-4a81-b30a-24355a910fed",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "ITALLO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "7774541b-39d2-4339-a4d2-4e42abf17577",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "VICTORSALES"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "71b717b0-32dd-40b2-bc9c-bb5b659c9caa",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "FM"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "0499e73d-b25a-48e8-acc3-0b884720fe2e",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Isagoge"
+        ]
+      },
+      "cupom": {
+        "nome": "FABIO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "1ede0cf1-b16d-4c48-bca7-b4dc2a9fe1d5",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "ITALLO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "257a66b4-2ab6-40c0-b3f2-5491753d6e63",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Heráclito"
+        ]
+      },
+      "cupom": {
+        "nome": "GREGOS"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "1ce22dc9-bccf-41e0-9cc6-bfd751c950ea",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "BERNARDO15"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "e91ca66c-3552-48fd-ad1a-9b4a4408dbf6",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "VICTORSALES"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "88dfac9f-cb2e-4703-a1f7-4454dff7573f",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Leviatã"
+      },
+      "cupom": {
+        "nome": "LEVIATA"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "8b8e6f84-064f-4106-935e-7a18af2f84ab",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "VOCACAO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "a033f02e-5f96-4b90-af48-5c73b065d396",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Banquete"
+        ]
+      },
+      "cupom": {
+        "nome": "VOCACAO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "66156708-cb33-4960-8367-a144f89f0f67",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "David Hume"
+      },
+      "cupom": {
+        "nome": "DAVIDHUME"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "b2f60ef9-013d-4d8f-8400-597752a7d9e7",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "AGOSTINHO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)",
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "b29bd214-da1d-4149-b7ab-f64aab62d92d",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "CHATEAU"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "443b3728-79fd-45a0-8f92-a4fd5d5bef97",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "AURORA"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "f394fc16-b59d-414f-8d28-945d17465319",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Aurora da Filosofia Grega"
+        ]
+      },
+      "cupom": {
+        "nome": "AURORA"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "d257e5d3-685f-4e52-95cc-a2ff3b82ee1c",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Aurora da Filosofia Grega"
+      },
+      "cupom": {
+        "nome": "AURORA"
+      },
+      "assinaturas": [
+        "Assinatura Bimestral (bimestral)",
+        "Assinatura Mensal (mensal)"
+      ]
+    },
+    {
+      "id": "80e5d2cc-bb0f-4d39-8797-688addfeb01d",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Categorias - Aristóteles"
+        ]
+      },
+      "cupom": {
+        "nome": "PHILOS"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "a73996d3-5e76-405b-80c2-72b1826efc4b",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "CHATEAU"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "37b95a99-475c-4a93-930d-1ccba15a08bc",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "David Hume"
+        ]
+      },
+      "cupom": {
+        "nome": "PROIBIDO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "1c8613c7-4495-4db3-b385-b64692459448",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Gênio do Cristianismo"
+        ]
+      },
+      "cupom": {
+        "nome": "CRISTAO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "8b6383f2-640a-4418-a593-c43cea94afbe",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Santo Agostinho"
+      },
+      "cupom": {
+        "nome": "CRISTAO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    },
+    {
+      "id": "91ee06ba-1151-452b-8eca-25518e1ff1b5",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Leviatã"
+        ]
+      },
+      "cupom": {
+        "nome": "LEVIATACDF"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (bimestral)",
+        "Assinatura 2 anos (mensal)",
+        "Assinatura 3 anos (bimestral)",
+        "Assinatura 3 anos (mensal)",
+        "Assinatura Anual (bimestral)",
+        "Assinatura Anual (mensal)"
+      ]
+    }
+  ]
+}

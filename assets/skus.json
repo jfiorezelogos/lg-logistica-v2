@@ -1,0 +1,412 @@
+{
+    "Leviatã": {
+        "sku": "L002A",
+        "peso": 1.83,
+        "guru_ids": [
+            "9e31add3-3068-4c73-8aa7-4ac6ade290f7",
+            "9e343ab2-3ae9-4288-9402-acfc5845ec42",
+            "9eaa8cb4-a476-414c-a743-5dc9d4297ed9",
+            "9f63f2cf-b245-41a0-8e7a-9f30e18a10b1",
+            "9f63f33c-5dda-46d4-b41c-ae1f6338abf7"
+        ],
+        "shopify_ids": [
+            8422521831614,
+            8430843822270
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 150.0
+    },
+    "O Príncipe": {
+        "sku": "B002A",
+        "peso": 0.592,
+        "guru_ids": [
+            "9e54a3d0-ac5f-421c-944f-3323874c3453",
+            "9eaa8c71-3ec2-4d30-9cd3-88789fe21fd5",
+            "9f63f49e-f040-4577-afc9-a5809d1b8756"
+        ],
+        "shopify_ids": [
+            8436768964798,
+            8430841299134,
+            8436769587390
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 80.0
+    },
+    "Isagoge": {
+        "sku": "B001A",
+        "peso": 0.61,
+        "guru_ids": [
+            "9ddd7b20-4ab6-4136-abeb-0b61c8faa89b"
+        ],
+        "shopify_ids": [
+            8368748855486,
+            8372098990270,
+            8372099317950,
+            8431204991166
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 80.0
+    },
+    "Virgílio": {
+        "sku": "L001A",
+        "peso": 0.398,
+        "guru_ids": [
+            "9dd64db5-c3e6-4ca2-8324-7369b5b15576",
+            "9dbbeb29-773b-4580-a833-7b3eff5c7308",
+            "9dd64d3a-e338-4fe2-9aa8-0aca659125a2"
+        ],
+        "shopify_ids": [
+            8383747031230
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 89.9
+    },
+    "Heráclito": {
+        "sku": "B003A",
+        "peso": 0.685,
+        "guru_ids": [],
+        "shopify_ids": [
+            8481920417982,
+            8481925857470,
+            8481926217918
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 80.0
+    },
+    "Aurora da Filosofia Grega": {
+        "sku": "L003A",
+        "peso": 0.652,
+        "guru_ids": [
+            "9ebf1652-56d5-4dc6-92c7-84ac509d1348",
+            "9ec06d03-0cda-43cb-8aaa-abc74ab44f31",
+            "9ec06b32-a6df-44db-a837-5a5017dc0177"
+        ],
+        "shopify_ids": [
+            8470748168382,
+            8470780903614
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 81.9
+    },
+    "David Hume": {
+        "sku": "B004A",
+        "peso": 0.59,
+        "guru_ids": [],
+        "shopify_ids": [
+            8521721807038,
+            8521729212606,
+            8521732554942
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 80.0
+    },
+    "Santo Agostinho": {
+        "sku": "B005A",
+        "peso": 0.72,
+        "guru_ids": [
+            "9fc81e7e-bafe-4c7f-8831-7a9be70ebfbd"
+        ],
+        "shopify_ids": [
+            8569490211006,
+            8569500926142,
+            8569636126910
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 80.0
+    },
+    "Sociologia dos Partidos Políticos": {
+        "sku": "L005A",
+        "peso": 0.648,
+        "guru_ids": [
+            "9f05bdfb-5526-4e0a-86a7-834574ce918f",
+            "9f1200b2-d3d3-480f-96ad-2f8548c74728",
+            "9f120228-1928-44a8-985d-2e92a2c4fc39"
+        ],
+        "shopify_ids": [],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 75.0
+    },
+    "Thomas Reid": {
+        "sku": "L004A",
+        "peso": 0.678,
+        "guru_ids": [
+            "9ef7341f-e846-42c6-9d5d-a895b749cfa0"
+        ],
+        "shopify_ids": [
+            8489914073278,
+            8489996288190
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false,
+        "preco_fallback": 75.0
+    },
+    "O Público e seus Problemas": {
+        "sku": "L006A",
+        "peso": 0.65,
+        "guru_ids": [
+            "9f8c4a77-0a0e-42a0-9ae4-84ae51445333",
+            "9fdc58ff-84c8-4c5a-8949-9471204680d0"
+        ],
+        "shopify_ids": [],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false
+    },
+    "O Gênio do Cristianismo": {
+        "sku": "L007A",
+        "peso": 0.65,
+        "guru_ids": [
+            "9fa63d62-7aed-459e-a0ed-30361530c7ba"
+        ],
+        "shopify_ids": [
+            8558655471806,
+            8558758559934
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false
+    },
+    "Banquete": {
+        "sku": "B006A",
+        "peso": 0.65,
+        "guru_ids": [],
+        "shopify_ids": [],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false
+    },
+    "Aristóteles - Categorias 01": {
+        "sku": "L008A",
+        "peso": 0.65,
+        "guru_ids": [
+            "9fd6513e-ae31-440c-a913-3d02c0b51375"
+        ],
+        "shopify_ids": [
+            8581899714750,
+            8581966594238,
+            8581972689086
+        ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": true
+    },
+    "Assinatura Anual (mensal) - mensal": {
+        "tipo": "assinatura",
+        "recorrencia": "anual",
+        "periodicidade": "mensal",
+        "guru_ids": [
+            "9f9e75cf-2f47-4474-b0ce-926e7c8d4a73",
+            "9f9e7616-9190-49f3-a713-79647f4a4209"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura Anual (bimestral) - bimestral": {
+        "tipo": "assinatura",
+        "recorrencia": "anual",
+        "periodicidade": "bimestral",
+        "guru_ids": [
+            "9d5e71d8-b13f-4e51-83ee-52d94d6c5d3b",
+            "9dc32bf1-bb0f-4d27-b172-c8841ae6d2f0"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura 2 anos (bimestral) - bimestral": {
+        "tipo": "assinatura",
+        "recorrencia": "bianual",
+        "periodicidade": "bimestral",
+        "guru_ids": [
+            "9efb95f8-201c-46e3-8241-3534ea5e34c7",
+            "9f2fb64f-2e41-4f61-8f54-b358abf70205"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura 2 anos (mensal) - mensal": {
+        "tipo": "assinatura",
+        "recorrencia": "bianual",
+        "periodicidade": "mensal",
+        "guru_ids": [
+            "9f9e7643-09a2-4158-b0ca-81127c7e0003",
+            "9f9e766d-1886-48a6-b6c3-e967bdba4e35"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura 3 anos (bimestral) - bimestral": {
+        "tipo": "assinatura",
+        "recorrencia": "trianual",
+        "periodicidade": "bimestral",
+        "guru_ids": [
+            "9efb999b-9643-4761-b876-445ecc31ebf9",
+            "9f2fa150-1da7-4585-8974-abfa242eaf21"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura 3 anos (mensal) - mensal": {
+        "tipo": "assinatura",
+        "recorrencia": "trianual",
+        "periodicidade": "mensal",
+        "guru_ids": [
+            "9f9e769b-3d5c-40b0-a5ce-1b5ad22ac05d",
+            "9f9e76b3-df7b-4d35-a0fe-6749949c8974"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura Bimestral (bimestral) - bimestral": {
+        "tipo": "assinatura",
+        "recorrencia": "bimestral",
+        "periodicidade": "bimestral",
+        "guru_ids": [
+            "9d5d8fe8-2000-4716-a609-5619d8f91c87",
+            "9dc506f6-bf75-444b-a347-38c81026af53"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura Mensal (mensal) - mensal": {
+        "tipo": "assinatura",
+        "recorrencia": "mensal",
+        "periodicidade": "mensal",
+        "guru_ids": [
+            "9f9f3455-b730-4590-b0c3-cbe0af4cda56",
+            "9f9f3485-62f0-4f46-af91-17c7aba9066f"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Aristóteles - Obras Completas": {
+        "sku": "C003A",
+        "peso": 0.0,
+        "tipo": "combo",
+        "composto_de": [],
+        "guru_ids": [
+            "9fd647f8-9471-41e6-8a57-918973e84a17"
+        ],
+        "shopify_ids": [
+            8582036488382,
+            8582088655038,
+            8582093701310
+        ],
+        "indisponivel": true
+    },
+    "Todas obras lançadas": {
+        "sku": "C001A",
+        "peso": 0.0,
+        "tipo": "combo",
+        "composto_de": [
+            "L002A",
+            "L001A",
+            "B001A",
+            "B002A",
+            "B003A"
+        ],
+        "guru_ids": [
+            "9ef8fd8b-b1a0-4292-a9fe-ab7e6ade86e0"
+        ],
+        "shopify_ids": [],
+        "indisponivel": false
+    },
+    "Combo Boas-vindas": {
+        "sku": "C002A",
+        "peso": 0.0,
+        "tipo": "combo",
+        "composto_de": [
+            "L002A",
+            "B004A",
+            "L004A",
+            "B005A"
+        ],
+        "guru_ids": [
+            "9fcc78ad-dbea-466a-80a1-eeba2205e4aa"
+        ],
+        "shopify_ids": [],
+        "indisponivel": false
+    },
+    "Aristóteles - 4 Volumes Órganon": {
+        "sku": "C004A",
+        "peso": 0.0,
+        "tipo": "combo",
+        "composto_de": [],
+        "guru_ids": [
+            "9fd522b3-c35f-4784-8e79-c5892a33a30c"
+        ],
+        "shopify_ids": [
+            8581984256190,
+            8582032294078,
+            8582034817214
+        ],
+        "indisponivel": true
+    },
+    "Assinatura 18 Meses - mensal (mensal)": {
+        "tipo": "assinatura",
+        "recorrencia": "18meses",
+        "periodicidade": "mensal",
+        "sku": "ASS18M-MES",
+        "peso": 0.0,
+        "indisponivel": false,
+        "composto_de": [],
+        "guru_ids": [
+            "a01d8454-ec2b-478a-ac08-46dec3b915f8",
+            "a01d8517-ec73-4472-b299-f7cc0fd8f0d0"
+        ]
+    },
+    "Assinatura Semestral - mensal (mensal)": {
+        "tipo": "assinatura",
+        "recorrencia": "semestral",
+        "periodicidade": "mensal",
+        "sku": "ASS06M-MES",
+        "peso": 0.0,
+        "indisponivel": false,
+        "composto_de": [],
+        "guru_ids": [
+            "a0044351-60e6-4fe1-9613-e36980c7ad69"
+        ]
+    }
+}
