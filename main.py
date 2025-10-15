@@ -431,59 +431,43 @@ def esta_no_ultimo_mes(
 
 
 def fetch_all_subscriptions() -> list[dict]:
-    """Coleta todas as assinaturas do Guru, com paginação, aceitando Response ou dict."""
+    """Coleta todas as assinaturas do Guru, com paginação via cursor, aceitando Response ou dict."""
     headers = {
         "Authorization": f"Bearer {settings.API_KEY_GURU}",
         "Content-Type": "application/json",
     }
 
-    page = 1
+    cursor = None
     out: list[dict] = []
 
     while True:
-        url = f"{BASE_URL_GURU}/subscriptions?page={page}"
+        # monta URL com ou sem cursor
+        url = f"{BASE_URL_GURU}/subscriptions"
+        if cursor:
+            url += f"?cursor={cursor}"
+
         resp = http_get(url, headers=headers)  # pode ser Response OU dict
 
         # --- normaliza para dict JSON ---
         try:
-            if isinstance(resp, dict):
-                data = resp
-            else:
-                # tenta .json() (Response do requests)
-                data = resp.json()
+            data = resp if isinstance(resp, dict) else resp.json()
         except Exception:
             data = {}
 
-        # diferentes formatos possíveis
-        items = data.get("data") or data.get("items") or data.get("subscriptions") or []
-
-        # caso venha aninhado: {"data":{"subscriptions":[...]}} ou similar
-        if isinstance(items, dict):
-            items = items.get("subscriptions") or items.get("items") or items.get("data") or []
-
+        # ✅ formato confirmado: {"data": [ ... ]}
+        items = data.get("data", [])
         if not isinstance(items, list):
             items = []
 
-        # acumula
+        # acumula resultados
         out.extend(items)
 
-        # tentamos descobrir se há próxima página
-        meta = data.get("meta") or {}
-        links = data.get("links") or {}
-        next_page = meta.get("next_page") or meta.get("next") or links.get("next")
+        # paginação por cursor
+        cursor = data.get("next_cursor")
+        has_more = bool(data.get("has_more_pages")) and not bool(data.get("on_last_page"))
 
-        # heurística de paginação simples: se não há next e a página atual trouxe poucos/zero itens, paramos
-        if not next_page:
-            break
-
-        # se vier número, usa; se vier URL, apenas incrementa
-        try:
-            page = int(next_page)
-        except Exception:
-            page += 1
-
-        # segurança extra: se a página atual não trouxe nada, paramos
-        if not items:
+        # critério de parada
+        if not cursor or not has_more or not items:
             break
 
     return out
