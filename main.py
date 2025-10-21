@@ -1972,8 +1972,8 @@ def exibir_resumo_coleta_guru(
     """
     - modo="produtos": mostra total e lista de produtos adicionados (nome -> qtd).
     - modo≠"produtos": além do bloco de assinaturas, mostra:
-        • Itens extras (brindes/embutidos): nome -> qtd
-        • Trocas de box: detalhes (se disponíveis) ou totais por período.
+        . Itens extras (brindes/embutidos): nome -> qtd
+        . Trocas de box: detalhes (se disponíveis) ou totais por período.
     """
 
     def _is_zero(v: Any) -> bool:
@@ -5276,11 +5276,11 @@ def registrar_envios(
     total = len(registros_assinaturas) + len(registros_produtos)
     msg = f"{total} registro(s) foram adicionados ao log."
     if registros_assinaturas:
-        msg += f"\n  • Assinaturas: {len(registros_assinaturas)}"
+        msg += f"\n  . Assinaturas: {len(registros_assinaturas)}"
     if registros_produtos:
-        msg += f"\n  • Produtos: {len(registros_produtos)}"
+        msg += f"\n  . Produtos: {len(registros_produtos)}"
     if ignorados_sem_trans:
-        msg += f"\n  • Ignorados (produtos sem transaction_id): {ignorados_sem_trans}"
+        msg += f"\n  . Ignorados (produtos sem transaction_id): {ignorados_sem_trans}"
     comunicador_global.mostrar_mensagem.emit("info", "Registro concluído", msg)
 
 
@@ -5508,202 +5508,323 @@ class _FulfillmentByOrder(TypedDict):
 class FulfillPedidoRunnable(QRunnable):
     def __init__(self, order_id: str, itens_line_ids: list[str] | set[str]) -> None:
         super().__init__()
-        self.order_id: str = normalizar_order_id(order_id)
-        self.itens_line_ids: set[str] = {normalizar_order_id(item) for item in itens_line_ids}
+
+        # Guardamos o "order_id" da planilha (transaction_id) e utilizaremos diretamente como Order GID.
+        self._order_id_planilha: str = str(order_id or "").strip()
+
+        def _only_digits(x: str) -> str:
+            return "".join(ch for ch in str(x) if ch.isdigit())
+
+        # IDs da planilha chegam como números puros (line_item_id).
+        planilha_nums = {_only_digits(item) for item in itens_line_ids if item}
+        planilha_gids = {f"gid://shopify/LineItem/{n}" for n in planilha_nums}
+
+        # Matching: aceitar número puro e GID (do LineItem).
+        self._planilha_ids_match: set[str] = planilha_nums | planilha_gids
+        self._planilha_nums: set[str] = planilha_nums
+
         self.signals: _SinaisFulfill = SinaisFulfill()
 
     @pyqtSlot()
     def run(self) -> None:
         try:
-            order_gid = f"gid://shopify/Order/{self.order_id}"
-            query_fo = """
-            query($orderId: ID!) {
-                order(id: $orderId) {
-                    fulfillmentOrders(first: 20) {
-                    edges {
-                        node {
-                            id
-                            status
-                            requestStatus
-                            supportedActions { action }
-                            fulfillmentHolds {
-                                id
-                                reason
-                                displayReason
-                                reasonNotes
-                                heldByRequestingApp
-                            }
-                            lineItems(first: 50) {
-                                edges {
-                                node {
-                                    id
-                                    remainingQuantity
-                                    totalQuantity
-                                    lineItem { id }
-                                }
-                                }
-                            }
-                            updatedAt
-                            assignedLocation { id name }   # útil p/ erros de location
-                            }
-                        }
-                    }
-                }
-            }
-            """
+            print(
+                f"[▶] Iniciando fulfillment (order_id_planilha={self._order_id_planilha} "
+                f"itens={sorted(self._planilha_nums)[:10]}{'…' if len(self._planilha_nums) > 10 else ''})"
+            )
+
+            # --- validações ---
+            digits_only = "".join(ch for ch in self._order_id_planilha if ch.isdigit())
+            if not digits_only:
+                raise RuntimeError("Order ID inválido na planilha (sem dígitos).")
+
+            if not self._planilha_nums:
+                raise RuntimeError("Nenhum id_line_item fornecido.")
 
             headers: dict[str, str] = {
                 "Content-Type": "application/json",
                 "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
             }
 
-            # controle de taxa global (estrutura externa)
+            # rate limit global
             ctrl = cast(MutableMapping[str, Any], controle_threading_shopify)
-            lock = cast(Any, ctrl["lock"])  # geralmente threading.Lock
+            lock = cast(Any, ctrl["lock"])
             with lock:
                 delta = float(time.time() - cast(float, ctrl.get("ultimo_acesso", 0.0)))
                 if delta < min_intervalo_graphql:
                     time.sleep(min_intervalo_graphql - delta)
                 ctrl["ultimo_acesso"] = time.time()
 
-            # 1) Buscar fulfillmentOrders
+            # === (1) Order.id direto da planilha ===
+            order_gid_resolvido = f"gid://shopify/Order/{int(digits_only)}"
+            print(f"[🔧] Order direto da planilha: id={order_gid_resolvido}")
+
+            # === (2) Query corrigida (assignedLocation.location.id) ===
+            query_fo = """
+            query($orderId: ID!) {
+            order(id: $orderId) {
+                id
+                name
+                displayFulfillmentStatus
+                fulfillmentOrders(first: 20) {
+                edges {
+                    node {
+                    id
+                    status
+                    requestStatus
+                    assignedLocation {
+                        name
+                        location { id }
+                    }
+                    supportedActions { action }
+                    lineItems(first: 10) {
+                        edges {
+                        node {
+                            id
+                            remainingQuantity
+                            totalQuantity
+                            lineItem {
+                            id
+                            sku
+                            name
+                            }
+                        }
+                        }
+                    }
+                    }
+                }
+                }
+            }
+            }
+            """
+
+            def _fetch_all_fos(sess: requests.Session, order_gid: str) -> list[dict[str, Any]]:
+                fos: list[dict[str, Any]] = []
+                after: str | None = None
+                while True:
+                    r = sess.post(
+                        GRAPHQL_URL,
+                        json={"query": query_fo, "variables": {"orderId": order_gid, "first": 50, "after": after}},
+                        timeout=10,
+                        verify=False,
+                    )
+                    r.raise_for_status()
+                    j = cast(dict[str, Any], r.json())
+                    conn = ((j.get("data") or {}).get("order") or {}).get("fulfillmentOrders") or {}
+                    edges = cast(list[dict[str, Any]], conn.get("edges") or [])
+                    for e in edges:
+                        node_fo = cast(dict[str, Any], (e.get("node") or {}))
+                        li_conn = node_fo.get("lineItems") or {}
+                        li_edges = cast(list[dict[str, Any]], li_conn.get("edges") or [])
+                        li_has_next = bool((li_conn.get("pageInfo") or {}).get("hasNextPage"))
+
+                        # pagina lineItems se necessário
+                        while li_has_next:
+                            li_after = (li_conn.get("pageInfo") or {}).get("endCursor")
+                            q_li_more = """
+                            query($foId: ID!, $first: Int!, $after: String) {
+                              node(id: $foId) {
+                                ... on FulfillmentOrder {
+                                  lineItems(first: $first, after: $after) {
+                                    edges {
+                                      cursor
+                                      node {
+                                        id
+                                        remainingQuantity
+                                        totalQuantity
+                                        lineItem { id }
+                                      }
+                                    }
+                                    pageInfo { hasNextPage endCursor }
+                                  }
+                                }
+                              }
+                            }
+                            """
+                            r_li = sess.post(
+                                GRAPHQL_URL,
+                                json={
+                                    "query": q_li_more,
+                                    "variables": {"foId": node_fo.get("id"), "first": 100, "after": li_after},
+                                },
+                                timeout=10,
+                                verify=False,
+                            )
+                            r_li.raise_for_status()
+                            j_li = cast(dict[str, Any], r_li.json())
+                            n_li = ((j_li.get("data") or {}).get("node") or {}).get("lineItems") or {}
+                            li_edges.extend(cast(list[dict[str, Any]], n_li.get("edges") or []))
+                            li_has_next = bool((n_li.get("pageInfo") or {}).get("hasNextPage"))
+                            li_conn = n_li
+
+                        node_fo["lineItems"] = {"edges": li_edges}
+                        fos.append(node_fo)
+
+                    if not bool((conn.get("pageInfo") or {}).get("hasNextPage")):
+                        break
+                    after = (conn.get("pageInfo") or {}).get("endCursor")
+                return fos
+
             with requests.Session() as sess:
                 sess.headers.update(headers)
-                r1 = sess.post(
-                    GRAPHQL_URL,
-                    json={"query": query_fo, "variables": {"orderId": order_gid}},
-                    timeout=10,
-                    verify=False,
-                )
+                fos_all = _fetch_all_fos(sess, order_gid_resolvido)
 
-            if r1.status_code != 200:
-                raise RuntimeError(f"Erro HTTP {r1.status_code} na consulta")
+            print(f"[i] FOs encontrados para order={order_gid_resolvido}: {len(fos_all)}")
 
-            dados = cast(dict[str, Any], r1.json())
-            orders = cast(
-                list[dict[str, Any]],
-                ((dados.get("data") or {}).get("order") or {}).get("fulfillmentOrders", {}).get("edges", []),
-            )
-
-            fulfillment_payloads: list[_FulfillmentByOrder] = []
-
-            # conjunto de lineItem_ids que vieram da planilha
-            planilha_ids: set[str] = set(self.itens_line_ids)
+            # === (3) Montar payloads agrupando por localização ===
+            payloads_por_location: dict[str, list[dict[str, Any]]] = {}
             encontrados: set[str] = set()
+            sem_remaining_itens: list[str] = []
+            motivos_fo: list[str] = []
 
-            for edge in orders:
-                node = cast(dict[str, Any], edge.get("node") or {})
+            for node_fo in fos_all:
+                fo_id = str(node_fo.get("id") or "")
+                status = str(node_fo.get("status") or "").upper()
+                request_status = str(node_fo.get("requestStatus") or "").upper()
+                loc_obj = node_fo.get("assignedLocation") or {}
+                loc_gid = str(((loc_obj.get("location") or {}).get("id")) or "")
+                loc_name = str(loc_obj.get("name") or "-")
 
-                status = str(node.get("status") or "").upper()
+                print(f"[FO] id={fo_id} status={status} requestStatus={request_status} loc={loc_name}")
+
                 if status in {"CANCELLED", "CLOSED", "ON_HOLD", "INCOMPLETE"}:
-                    print(f"[i] FO {node.get('id')} status={status} — pulando.")
-                    continue
-                if status not in {"OPEN", "IN_PROGRESS"}:
+                    msg = f"FO {fo_id} pulado: status={status}"
+                    motivos_fo.append(msg)
+                    print("[•]", msg)
                     continue
 
-                holds_list = cast(list[dict[str, Any]], node.get("fulfillmentHolds") or [])
+                if status not in {"OPEN", "IN_PROGRESS"}:
+                    msg = f"FO {fo_id} pulado: status {status} não apto"
+                    motivos_fo.append(msg)
+                    print("[•]", msg)
+                    continue
+
+                holds_list = cast(list[dict[str, Any]], node_fo.get("fulfillmentHolds") or [])
                 if holds_list:
                     reasons = [str(h.get("reason") or "") for h in holds_list]
                     disp = [str(h.get("displayReason") or "") for h in holds_list]
-                    print(
-                        f"[⚠️] FO {node.get('id')} em hold: {', '.join([r for r in reasons if r]) or 'unknown'}; "
-                        f"display={'; '.join([d for d in disp if d]) or '-'} — pulando."
-                    )
+                    msg = f"FO {fo_id} HOLD ({', '.join(reasons) or '-'}) display={'; '.join(disp) or '-'}"
+                    motivos_fo.append(msg)
+                    print("[•]", msg)
                     continue
 
-                # supportedActions pode vir como lista de objetos {"action": "..."}; se não vier, seguimos em frente
-                sa_raw = node.get("supportedActions")
+                sa_raw = node_fo.get("supportedActions")
+                supported: set[str] = set()
                 if isinstance(sa_raw, list):
                     supported = {
                         str((a or {}).get("action") or "").upper() if isinstance(a, dict) else str(a).upper()
                         for a in sa_raw
                     }
-                    if "CREATE_FULFILLMENT" not in supported:
-                        print(f"[i] FO {node.get('id')} sem CREATE_FULFILLMENT (status={status}) — pulando.")
-                        continue
+                print(f"[FO] supportedActions={sorted(supported) or '-'}")
+                if "CREATE_FULFILLMENT" not in supported:
+                    msg = f"FO {fo_id} sem CREATE_FULFILLMENT"
+                    motivos_fo.append(msg)
+                    print("[•]", msg)
+                    continue
 
-                items: list[_FulfillmentOrderLineItem] = []
+                li_edges = cast(list[dict[str, Any]], ((node_fo.get("lineItems") or {}).get("edges") or []))
+                print(f"[FO] lineItems: {len(li_edges)}")
 
-                li_edges = cast(list[dict[str, Any]], ((node.get("lineItems") or {}).get("edges") or []))
+                items: list[dict[str, Any]] = []
                 for li in li_edges:
                     li_node = cast(dict[str, Any], li.get("node") or {})
-                    line_item_gid = str((li_node.get("lineItem") or {}).get("id", ""))
-                    line_item_id = normalizar_order_id(line_item_gid)
+                    foli_gid = str(li_node.get("id", "") or "")
+                    line_item_gid = str((li_node.get("lineItem") or {}).get("id", "") or "")
+                    line_item_num = "".join(ch for ch in line_item_gid if ch.isdigit())
                     remaining = int(li_node.get("remainingQuantity") or 0)
+                    total = int(li_node.get("totalQuantity") or 0)
+                    candidatos = {c for c in (line_item_gid, line_item_num) if c}
+                    match = bool(self._planilha_ids_match.intersection(candidatos))
 
-                    if line_item_id in planilha_ids and remaining > 0:
-                        items.append({"id": str(li_node.get("id", "")), "quantity": remaining})
-                        encontrados.add(line_item_id)
-                    else:
-                        # mantém visibilidade do porquê não entrou
-                        print(f"[🔍] Ignorado: lineItem.id={line_item_id}, restante={remaining}")
-
-                if items:
-                    fulfillment_payloads.append(
-                        {
-                            "fulfillmentOrderId": str(node.get("id", "")),
-                            "fulfillmentOrderLineItems": items,
-                        }
+                    print(
+                        f"[LI] foli={foli_gid.split('/')[-1]} lineItem={line_item_num or '-'} remaining={remaining} total={total} match={'Y' if match else 'N'}"
                     )
 
-            # Se nada entrou, reporte claramente os que faltaram e não tente mutation
-            if not fulfillment_payloads:
-                faltaram = sorted(planilha_ids - encontrados)
+                    if match:
+                        if remaining > 0:
+                            items.append({"id": foli_gid, "quantity": remaining})
+                            encontrados.add(line_item_num)
+                        else:
+                            sem_remaining_itens.append(line_item_num)
+
+                if items:
+                    payloads_por_location.setdefault(loc_gid, []).append(
+                        {"fulfillmentOrderId": fo_id, "fulfillmentOrderLineItems": items}
+                    )
+                else:
+                    print(f"[FO] nenhum item apto (match + remaining>0) para FO {fo_id}")
+
+            # === (4) Se nada apto ===
+            if not any(payloads_por_location.values()):
                 msg = "Nada a enviar"
-                if faltaram:
-                    msg += f" (IDs sem remaining ou não encontrados: {', '.join(faltaram[:10])}{'…' if len(faltaram)>10 else ''})"
-                self.signals.erro.emit(self.order_id, msg)
+                partes: list[str] = []
+                if sem_remaining_itens:
+                    partes.append("IDs encontrados sem remaining: " + ", ".join(sem_remaining_itens))
+                if motivos_fo:
+                    partes.append("FOs pulados: " + " | ".join(motivos_fo[:3]))
+                if partes:
+                    msg += " (" + "; ".join(partes) + ")"
+                print(f"[✖] {msg}")
+                self.signals.erro.emit(self._order_id_planilha, msg)
                 return
 
-            # 2) Criar fulfillment
+            # === (5) fulfillmentCreate ===
             mutation = """
-            mutation fulfillmentCreate($fulfillment: FulfillmentV2Input!) {
-              fulfillmentCreateV2(fulfillment: $fulfillment) {
+            mutation fulfillmentCreate($fulfillment: FulfillmentInput!) {
+              fulfillmentCreate(fulfillment: $fulfillment) {
                 fulfillment { id status }
                 userErrors { field message }
               }
             }
             """
 
+            enviados_total = 0
+
             with requests.Session() as sess:
                 sess.headers.update(headers)
-                r2 = sess.post(
-                    GRAPHQL_URL,
-                    json={
+
+                for loc_gid, fo_payloads in payloads_por_location.items():
+                    if not fo_payloads:
+                        continue
+
+                    payload = {
                         "query": mutation,
                         "variables": {
                             "fulfillment": {
                                 "notifyCustomer": False,
-                                "lineItemsByFulfillmentOrder": fulfillment_payloads,
+                                "lineItemsByFulfillmentOrder": fo_payloads,
                             }
                         },
-                    },
-                    timeout=10,
-                    verify=False,
-                )
+                    }
+                    print(
+                        f"[→] Enviando fulfillmentCreate: location={loc_gid.split('/')[-1]} FO_count={len(fo_payloads)}"
+                    )
+                    r2 = sess.post(GRAPHQL_URL, json=payload, timeout=10, verify=False)
+                    r2.raise_for_status()
+                    resp = cast(dict[str, Any], r2.json())
+                    user_errors = ((resp.get("data") or {}).get("fulfillmentCreate") or {}).get("userErrors") or []
+                    if user_errors:
+                        errs = "; ".join(f"{e.get('message')}" for e in user_errors)
+                        print(f"[⚠] userErrors (loc={loc_gid.split('/')[-1]}): {errs}")
+                        self.signals.erro.emit(self._order_id_planilha, f"[loc {loc_gid.split('/')[-1]}] {errs}")
+                        continue
 
-            if r2.status_code != 200:
-                raise RuntimeError(f"Erro HTTP {r2.status_code} na mutation")
+                    enviados_grupo = sum(
+                        int(item["quantity"]) for fo in fo_payloads for item in fo["fulfillmentOrderLineItems"]
+                    )
+                    enviados_total += enviados_grupo
+                    print(f"[✅] fulfillmentCreate OK (loc={loc_gid.split('/')[-1]}): enviados={enviados_grupo}")
 
-            resp = cast(dict[str, Any], r2.json())
-            user_errors = cast(
-                list[dict[str, Any]],
-                ((resp.get("data") or {}).get("fulfillmentCreateV2") or {}).get("userErrors", []),
-            )
-            if user_errors:
-                erros_msg = "; ".join(
-                    f"{('/'.join(map(str, (e.get('field') or []))))} → {e.get('message')}" for e in user_errors
-                )
-                self.signals.erro.emit(self.order_id, erros_msg or "Erro na criação do fulfillment")
-                return
+            if enviados_total == 0:
+                raise RuntimeError("Nenhum fulfillment criado (todas as locations retornaram userErrors)")
 
-            qtd_total = sum(
-                int(item["quantity"]) for fo in fulfillment_payloads for item in fo["fulfillmentOrderLineItems"]
-            )
-            self.signals.concluido.emit(self.order_id, qtd_total)
+            print(f"[✅] Total enviado no pedido: {enviados_total} (order_gID={order_gid_resolvido})")
+            self.signals.concluido.emit(self._order_id_planilha, enviados_total)
 
         except Exception as e:
-            self.signals.erro.emit(self.order_id, str(e))
+            err = str(e)
+            print(f"[✖] Exceção fulfillment order(planilha)={self._order_id_planilha}: {err}")
+            self.signals.erro.emit(self._order_id_planilha, err)
 
 
 def normalizar_texto(texto: Any) -> str:
@@ -5818,50 +5939,77 @@ class NormalizarEndereco(QRunnable):
                 logger.info("addr_norm_cancelled_mid", extra={"order_id": pedido_id})
                 return
 
+            # idealmente ponha este regex no topo do módulo:
+            _NUM_RE = re.compile(r"\b(\d{1,5}[A-Za-z]?)\b")
+
             # Heurística: endereço já parece completo?
             precisa: bool = False  # default; pode ser alterado nos ramos abaixo
-            if validar_endereco(self.endereco_raw):
+
+            if "," in self.endereco_raw:
+                # Regra nova: "endereço, número" => não chama GPT
                 partes = [p.strip() for p in self.endereco_raw.split(",", 1)]
-                base = partes[0]
-                numero = partes[1] if len(partes) > 1 else "s/n"
-                complemento = self.complemento_raw
+                base = partes[0].strip(" ,.-")
+                pos_virgula = partes[1] if len(partes) > 1 else ""
+
+                m = _NUM_RE.search(pos_virgula)
+                numero = m.group(1) if m else "s/n"
+
+                complemento = (self.complemento_raw or "").strip()
+                if not complemento:
+                    complemento = "-"
+
+                precisa = numero == "s/n"
+
                 logger.debug(
-                    "addr_norm_direct_ok",
+                    "addr_norm_direct_split",
                     extra={"order_id": pedido_id, "base": base, "numero": numero},
                 )
             else:
-                # Chamada ao GPT helper (tipamos como Mapping[str, Any])
-                resposta = cast(
-                    Mapping[str, Any],
-                    normalizar_enderecos_gpt(
-                        address1=self.endereco_raw,
-                        address2=self.complemento_raw,
-                        logradouro_cep=logradouro_cep,
-                        bairro_cep=bairro_cep,
-                    ),
-                )
+                # Usa GPT; fallback por regex apenas se der erro na requisição
+                try:
+                    resposta = cast(
+                        Mapping[str, Any],
+                        normalizar_enderecos_gpt(
+                            address1=self.endereco_raw,
+                            address2=self.complemento_raw,
+                            logradouro_cep=logradouro_cep,
+                            bairro_cep=bairro_cep,
+                        ),
+                    )
+                except Exception:
+                    # Se sua normalizar_enderecos_gpt já encapsula try/except, este bloco não roda.
+                    # De todo modo, mantemos a proteção aqui:
+                    a1 = (self.endereco_raw or "").strip()
+                    a2 = (self.complemento_raw or "").strip()
+                    base = a1.strip(" ,.-")
+                    m = _NUM_RE.search(a1)
+                    numero = m.group(1) if m else "s/n"
+                    complemento = a2 if a2 else "-"
+                    precisa = numero == "s/n"
+                else:
+                    # resposta GPT OK
+                    base = str(resposta.get("base", "") or "").strip()
+                    numero = str(resposta.get("numero", "") or "").strip()
+                    complemento = str(resposta.get("complemento", "") or "").strip()
+                    precisa = bool(resposta.get("precisa_contato", False))
 
-                if cancelador is not None and cancelador.is_set():
-                    return
+                    # Defaults exigidos
+                    if not numero:
+                        numero = "s/n"
+                        precisa = True
+                    if not complemento:
+                        complemento = "-"
 
-                base = str(resposta.get("base", "") or "").strip()
-                numero = str(resposta.get("numero", "") or "").strip()
-                if not re.match(r"^\d+[A-Za-z]?$", numero):
-                    numero = "s/n"
-                    precisa = True
+                    # Evita 'complemento' igual ao número
+                    if complemento.strip() == numero.strip():
+                        complemento = "-"
 
-                complemento = str(resposta.get("complemento", "") or self.complemento_raw).strip()
-                if complemento.strip() == numero.strip():
-                    complemento = ""
-
-                precisa = bool(resposta.get("precisa_contato", True))
-
-                # Segurança adicional com logradouro do CEP
-                if logradouro_cep:
-                    base_normalizada = normalizar_texto(base)
-                    logradouro_normalizado = normalizar_texto(logradouro_cep)
-                    if logradouro_normalizado not in base_normalizada:
-                        base = logradouro_cep.strip()
+                    # Segurança adicional com logradouro do CEP
+                    if logradouro_cep:
+                        base_normalizada = normalizar_texto(base)
+                        logradouro_normalizado = normalizar_texto(logradouro_cep)
+                        if logradouro_normalizado not in base_normalizada:
+                            base = logradouro_cep.strip()
 
             resultado: EnderecoResultado = {
                 "endereco_base": base,
@@ -5908,14 +6056,11 @@ class NormalizarEndereco(QRunnable):
             except Exception as e:
                 logger.exception("addr_norm_pending_remove_error", extra={"order_id": pedido_id, "err": str(e)})
 
+            # dentro do finally de NormalizarEndereco.run
             if self.sinal_finalizacao is not None:
                 try:
-                    sig = self.sinal_finalizacao.finalizado
-                    emitter = getattr(sig, "emit", None)
-                    if callable(emitter):
-                        emitter()
-                    elif callable(sig):
-                        sig()
+                    # resultado: dict com os campos normalizados desse pedido
+                    self.sinal_finalizacao.finalizado.emit(pedido_id, resultado)
                     logger.debug("addr_norm_final_signal", extra={"order_id": pedido_id})
                 except Exception as e:
                     logger.exception("addr_norm_final_signal_error", extra={"order_id": pedido_id, "err": str(e)})
@@ -6187,13 +6332,10 @@ class ObterCpfShopifyRunnable(QRunnable):
 
             if self.sinal_finalizacao:
                 try:
-                    self.sinal_finalizacao.finalizado.emit()
+                    self.sinal_finalizacao.finalizado.emit(self.order_id, {})
                     logger.debug("cpf_lookup_final_signal", extra={"order_id": self.order_id})
                 except Exception as e:
-                    logger.exception(
-                        "cpf_lookup_final_signal_error",
-                        extra={"order_id": self.order_id, "err": str(e)},
-                    )
+                    logger.exception("cpf_lookup_final_signal_error", extra={"order_id": self.order_id, "err": str(e)})
 
 
 def iniciar_busca_cpfs(
@@ -6365,12 +6507,11 @@ class BuscarBairroRunnable(QRunnable):
 
             if self.sinal_finalizacao is not None:
                 try:
-                    self.sinal_finalizacao.finalizado.emit()
+                    self.sinal_finalizacao.finalizado.emit(self.order_id, {})
                     logger.debug("bairro_lookup_final_signal", extra={"order_id": self.order_id})
                 except Exception as e:
                     logger.exception(
-                        "bairro_lookup_final_signal_error",
-                        extra={"order_id": self.order_id, "err": str(e)},
+                        "bairro_lookup_final_signal_error", extra={"order_id": self.order_id, "err": str(e)}
                     )
 
 
@@ -7313,10 +7454,10 @@ class GPTRateLimiter:
                     break
 
         # Fallback seguro
-        return {"base": prompt, "numero": "s/n", "complemento": "", "precisa_contato": True}
+        raise RuntimeError("gpt_request_failed")
 
 
-gpt_limiter = GPTRateLimiter(max_concorrentes=3, intervalo_minimo=0.6)
+gpt_limiter = GPTRateLimiter(max_concorrentes=2, intervalo_minimo=1.5)
 
 
 class EnderecoLLM(TypedDict):
@@ -7332,6 +7473,27 @@ def normalizar_enderecos_gpt(
     logradouro_cep: str,
     bairro_cep: str,
 ) -> EnderecoLLM:
+    import json
+    import re
+    from typing import cast
+
+    def _fallback_regex(addr1: str, addr2: str) -> EnderecoLLM:
+        a1 = (addr1 or "").strip()
+        a2 = (addr2 or "").strip()
+        m = re.search(r"\b(\d{1,5}[A-Za-z]?)\b", a1)
+        if m:
+            numero = m.group(1)
+            base = a1[: m.start()].strip(" ,.-")
+        else:
+            numero = "s/n"
+            base = a1.strip(" ,.-")
+        complemento = a2 or "-"
+        if bairro_cep and complemento != "-":
+            complemento = re.sub(re.escape(str(bairro_cep)), "", complemento, flags=re.IGNORECASE).strip(" ,.-") or "-"
+        if base and complemento.lower().startswith(base.lower()):
+            complemento = complemento[len(base) :].strip(" ,.-") or "-"
+        return EnderecoLLM(base=base, numero=numero, complemento=complemento, precisa_contato=(numero == "s/n"))
+
     prompt = f"""
 Responda com um JSON contendo:
 
@@ -7386,27 +7548,53 @@ Formato de resposta:
 {{"base": "...", "numero": "...", "complemento": "...", "precisa_contato": false}}
 """.strip()
 
-    # gpt_limiter/openai_client vêm do escopo do módulo; se preferir, passe-os como parâmetros e tipe também
-    resp = gpt_limiter.chamar(prompt, openai_client)
+    # >>> ajuste essencial: capturar erro de requisição e cair no fallback
+    try:
+        resp = gpt_limiter.chamar(prompt, openai_client)
+    except Exception:
+        return _fallback_regex(address1, address2)
 
-    # Se já veio dict, só valida/coage tipos
     if isinstance(resp, dict):
         data = resp
     else:
-        # assume string JSON
+        txt = str(resp or "").strip()
+        if ("Responda com um JSON" in txt) or ("Dados fornecidos:" in txt):
+            return _fallback_regex(address1, address2)
         try:
-            data = json.loads(cast(str, resp))
+            data = json.loads(cast(str, txt))
         except Exception:
-            # fallback seguro
-            return EnderecoLLM(base="", numero="s/n", complemento="", precisa_contato=True)
+            return _fallback_regex(address1, address2)
 
-    out: EnderecoLLM = EnderecoLLM(
-        base=str(data.get("base", "") or ""),
-        numero=str(data.get("numero", "") or ""),
-        complemento=str(data.get("complemento", "") or ""),
-        precisa_contato=bool(data.get("precisa_contato", False)),
+    base = str(data.get("base", "") or "").strip()
+    numero = str(data.get("numero", "") or "").strip()
+    complemento = str(data.get("complemento", "") or "").strip()
+    precisa_contato = bool(data.get("precisa_contato", False))
+
+    if not numero and not complemento:
+        return _fallback_regex(address1, address2)
+
+    if not numero or not re.match(r"^\d+[A-Za-z]?$", numero):
+        numero = "s/n"
+        precisa_contato = True
+
+    if not complemento:
+        complemento = "-"
+
+    if bairro_cep and complemento != "-":
+        complemento = re.sub(re.escape(str(bairro_cep)), "", complemento, flags=re.IGNORECASE).strip(" ,.-") or "-"
+
+    if base and complemento.lower().startswith(base.lower()):
+        complemento = complemento[len(base) :].strip(" ,.-") or "-"
+
+    if "Responda com um JSON" in f"{base} {numero} {complemento}":
+        return _fallback_regex(address1, address2)
+
+    return EnderecoLLM(
+        base=base,
+        numero=numero,
+        complemento=complemento,
+        precisa_contato=precisa_contato,
     )
-    return out
 
 
 def finalizar_coleta_shopify(
@@ -9028,7 +9216,7 @@ def salvar_planilha_bling(df: pd.DataFrame, output_path: str) -> None:
     estado["df_planilha_exportada"] = df_final.copy()
 
     # Remove colunas internas antes de exportar
-    colunas_remover = ["Data Pedido", "Conjunto Produtos", "ID Lote", "indisponivel"]
+    colunas_remover = ["Conjunto Produtos", "ID Lote", "indisponivel"]
     df_para_exportar = df_final.drop(columns=colunas_remover, errors="ignore")
 
     try:

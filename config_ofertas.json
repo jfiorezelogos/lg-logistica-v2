@@ -1670,6 +1670,24 @@
         "Assinatura Anual (bimestral)",
         "Assinatura Anual (mensal)"
       ]
+    },
+    {
+      "id": "0ebbe62e-f009-4708-a634-b5e50dca2a28",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "SERVINO"
+      },
+      "assinaturas": [
+        "Assinatura 2 anos (mensal) - mensal",
+        "Assinatura 3 anos (mensal) - mensal",
+        "Assinatura Anual (mensal) - mensal"
+      ]
     }
   ]
 }
