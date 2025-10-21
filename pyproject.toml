@@ -5,7 +5,16 @@ target-version = ["py313"]
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-extend-exclude = ["stubs"]
+extend-exclude = [
+  "stubs",
+  "dist",
+  "build",
+  "assets",
+  "installer",
+  ".venv",
+  ".mypy_cache",
+  "__pycache__",
+]
 
 [tool.ruff.lint]
 # Regras ativas (equilíbrio entre signal/ruído)
@@ -48,14 +57,31 @@ explicit_package_bases = true
 disallow_untyped_defs = true
 warn_return_any = true
 warn_unused_ignores = true
-# Aponta para stubs locais (ex.: platformdirs)
 mypy_path = "stubs"
 
-# Se você quiser rodar o mypy sempre com o Python do venv, descomente:
-# python_executable = ".venv\\Scripts\\python.exe"
+# ⚠️ não checar artefatos/ambientes
+exclude = '''(?x)(
+  ^dist/|
+  ^build/|
+  ^assets/|
+  ^installer/|
+  ^\.venv/|
+  ^\.mypy_cache/|
+  ^__pycache__/
+)'''
 
 [[tool.mypy.overrides]]
 module = ["backend", "frontend", "reportlab.*"]
 disallow_untyped_defs = false
 warn_return_any = false
+ignore_missing_imports = true
+
+# PyQt5 stubs são incompletas → ignoramos missing imports
+[[tool.mypy.overrides]]
+module = ["PyQt5.*"]
+ignore_missing_imports = true
+
+# fpdf não tem stubs
+[[tool.mypy.overrides]]
+module = ["fpdf"]
 ignore_missing_imports = true
