@@ -8948,7 +8948,7 @@ def exibir_planilha(df: pd.DataFrame | None) -> None:
 
 def abrir_no_sistema(path: str) -> None:
     if sys.platform.startswith("win"):
-        os.startfile(path)  # type: ignore[attr-defined]
+        os.startfile(path)
     elif sys.platform == "darwin":
         subprocess.Popen(["open", path])
     else:
