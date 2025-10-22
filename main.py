@@ -28,7 +28,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from json import JSONDecodeError
 from logging import Logger
 from os import PathLike
-from pathlib import Path  # (mantenha só aqui)
+from pathlib import Path
 from threading import Event
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast, overload
 from zoneinfo import ZoneInfo
@@ -607,7 +607,7 @@ def mapear_assinaturas(
 def iniciar_mapeamento_produtos_guru(
     skus_info: Mapping[str, MutableMapping[str, Any]],
     produtos_guru: Sequence[Mapping[str, Any]] | None,
-    skus_path: str,
+    skus_path: Path,
 ) -> None:
     class DialogoMapeamento(QDialog):
         def __init__(self) -> None:
@@ -808,7 +808,7 @@ def iniciar_mapeamento_produtos_guru(
             if is_assinatura:
                 entrada["tipo"] = "assinatura"
                 entrada["recorrencia"] = duracao_lbl
-                entrada["duracao_meses"] = DUR_LABEL_TO_MONTHS[duracao_lbl]  # numérico p/ regra do último mês
+                entrada["duracao_meses"] = DUR_LABEL_TO_MONTHS[cast(str, duracao_lbl)]
                 entrada["periodicidade"] = periodicidade  # "mensal" | "bimestral"
                 entrada.setdefault("sku", "")
                 entrada.setdefault("peso", 0.0)
@@ -2287,8 +2287,8 @@ class WorkerThreadGuru(QThread):
         self.gerenciador: GerenciadorProgresso = gerenciador
 
         # Mantém Qt.QueuedConnection, mas silencia o stub do PyQt para mypy
-        self.progresso.connect(self.gerenciador.atualizar, QtCore.Qt.ConnectionType.QueuedConnection)
-        self.fechar_ui.connect(self.gerenciador.fechar, QtCore.Qt.ConnectionType.QueuedConnection)
+        self.progresso.connect(self.gerenciador.atualizar)
+        self.fechar_ui.connect(self.gerenciador.fechar)
 
         self._parent_correlation_id = get_correlation_id()
 
@@ -3194,9 +3194,7 @@ def gerenciar_coleta_vendas_assinaturas(
     todas_tarefas.extend(t)
 
     print("[1️⃣] Gerando tarefas para anuais...")
-    t: list[tuple[str, str, str, str]] = [
-        (pid, ini, fim, "anuais") for pid in ids_map.get("anuais", []) for (ini, fim) in intervalos_anuais
-    ]
+    t = [(pid, ini, fim, "anuais") for pid in ids_map.get("anuais", []) for (ini, fim) in intervalos_anuais]
     todas_tarefas.extend(t)
 
     print("[1.05️⃣] Gerando tarefas para semestrais...")
@@ -4510,7 +4508,7 @@ def registrar_envios_planilha_guru() -> None:
             df: pd.DataFrame = pd.read_excel(caminho_arquivo)
         else:
             df = pd.read_csv(caminho_arquivo)
-        df.columns = [str(c).strip().lower() for c in df.columns]
+        df.columns = pd.Index([str(c).strip().lower() for c in df.columns])
 
         # valida colunas mínimas
         tem_transacao: bool = "id transação" in df.columns
@@ -8074,7 +8072,7 @@ def tratar_erro_coleta_shopify(gerenciador: GerenciadorProgresso) -> None:
 def mapear_produtos_shopify(
     skus_info: MutableMapping[str, Any],
     produtos_shopify: Sequence[Mapping[str, Any]],
-    skus_path: str,
+    skus_path: Path,
 ) -> None:
     class DialogoMapeamento(QDialog):
         def __init__(self) -> None:
@@ -8836,12 +8834,12 @@ class VisualizadorPlanilha(QDialog):
         _ncol: int = len(self.df.columns)
         for i in range(nlin):
             for j, col in enumerate(list(self.df.columns)):
-                valor = str(self.df.iloc[i, j])
-                item = QTableWidgetItem(valor)
+                valor: str = str(self.df.iloc[i, j])
+                item: QTableWidgetItem = QTableWidgetItem(valor)
                 if col in ["Data", "Data Pedido"]:
                     try:
                         dt = datetime.strptime(valor, "%d/%m/%Y").replace(tzinfo=TZ_APP)
-                        item.setData(Qt.UserRole, dt)
+                        item.setData(int(Qt.UserRole), dt)
                     except Exception:
                         pass
                 self.tabela.setItem(i, j, item)
@@ -8850,7 +8848,7 @@ class VisualizadorPlanilha(QDialog):
         layout.addWidget(self.tabela)
 
         # ⌨️ Atalho DELETE para remover linhas com confirmação
-        atalho_delete: QShortcut = QShortcut(QKeySequence(Qt.Key_Delete), self.tabela)
+        atalho_delete: QShortcut = QShortcut(QKeySequence(int(Qt.Key_Delete)), self.tabela)
         atalho_delete.activated.connect(self.remover_linhas_selecionadas)
 
         # 🔘 Botões
@@ -9275,7 +9273,9 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
     )
 
     for tabela in [tabela_prod, tabela_assin, tabela_combo]:
-        tabela.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        header = tabela.horizontalHeader()
+        if header is not None:
+            header.setSectionResizeMode(QHeaderView.Stretch)
 
     layout_prod: QVBoxLayout = QVBoxLayout(tab_produtos)
     layout_prod.addWidget(tabela_prod)
@@ -9806,17 +9806,6 @@ def criar_grupo_guru(
     btn_editar = QPushButton("✏️ Editar Produtos")
     btn_editar.clicked.connect(lambda: abrir_editor_produtos(None))
     linha_config.addWidget(btn_editar)
-
-    # 🔗 Mapear produtos do Guru (fica aqui mesmo)
-    btn_mapear_guru = QPushButton("🔗 Mapear produtos do Guru")
-    btn_mapear_guru.clicked.connect(
-        lambda: (
-            iniciar_mapeamento_produtos_guru(
-                skus_info, coletar_produtos_guru(), skus_path  # se já existir no seu escopo
-            )
-        )
-    )
-    linha_config.addWidget(btn_mapear_guru)
 
     layout.addLayout(linha_config)
 
