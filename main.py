@@ -11,6 +11,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -8945,6 +8946,15 @@ def exibir_planilha(df: pd.DataFrame | None) -> None:
 # Processamento e exportação da planilha para o Bling
 
 
+def abrir_no_sistema(path: str) -> None:
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
 def exportar_planilha_bling() -> None:
     # estado.get() retorna Any -> cast p/ Optional[pd.DataFrame]
     df: pd.DataFrame | None = cast(pd.DataFrame | None, estado.get("df_planilha_parcial"))
@@ -9086,8 +9096,7 @@ def gerar_pdf_producao_logistica(
 
     # 💾 Salva e abre
     pdf.output(caminho_pdf)
-    # os.startfile é específico do Windows; para mypy tudo ok:
-    os.startfile(caminho_pdf)
+    abrir_no_sistema(caminho_pdf)
 
 
 def salvar_planilha_bling(df: pd.DataFrame, output_path: str) -> None:
@@ -9153,8 +9162,8 @@ def salvar_planilha_bling(df: pd.DataFrame, output_path: str) -> None:
     df_final["Valor Total"] = pd.to_numeric(df_final["Valor Total"], errors="coerce")
 
     if df_final["Número pedido"].notna().any():
-        total_por_pedido = df_final.groupby("Número pedido", sort=False, as_index=False).agg(
-            **{"Total Pedido": ("Valor Total", "sum")}
+        total_por_pedido: pd.DataFrame = (
+            df_final.groupby("Número pedido", sort=False, as_index=False)["Valor Total"].sum().to_frame("Total Pedido")
         )
         if "Total Pedido" in df_final.columns:
             df_final.drop(columns=["Total Pedido"], inplace=True)
@@ -9693,7 +9702,7 @@ def gerar_pdfs_nfes_producao(estado: MutableMapping[str, Any]) -> None:
             if platform.system() == "Darwin":
                 subprocess.run(["open", pasta_pdf], check=False)
             elif platform.system() == "Windows":
-                os.startfile(pasta_pdf)
+                abrir_no_sistema(pasta_pdf)
             else:
                 subprocess.run(["xdg-open", pasta_pdf], check=False)
         except Exception as e:
