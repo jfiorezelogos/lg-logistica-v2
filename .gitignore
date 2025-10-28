@@ -18,6 +18,7 @@ sistema.log
 # Build e distribuição
 dist/
 build/
+installer/
 
 # Caches de ferramentas
 .mypy_cache/
