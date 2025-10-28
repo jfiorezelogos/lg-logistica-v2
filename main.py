@@ -4659,15 +4659,13 @@ def importar_planilha_pedidos_guru() -> None:
         if caminho.endswith(".csv"):
             df: pd.DataFrame = pd.read_csv(caminho, sep=";", encoding="utf-8", quotechar='"', dtype=str)
         else:
-            df = pd.read_excel(caminho)
+            df = pd.read_excel(caminho, dtype=str)  # lê tudo como string p/ evitar auto-conversões
     except Exception as e:
         comunicador_global.mostrar_mensagem.emit("erro", "Erro", f"Erro ao carregar planilha: {e}")
         return
 
     # ===== Selecionar produto a partir do skus.json =====
-    # skus_info é global e possivelmente sem tipo -> usar cast para satisfazer mypy
     skus_map: Mapping[str, dict[str, Any]] = cast(Mapping[str, dict[str, Any]], skus_info)
-
     nomes_produtos: list[str] = sorted(skus_map.keys())
 
     # QInputDialog.getItem -> tuple[str, bool]
@@ -4692,14 +4690,40 @@ def importar_planilha_pedidos_guru() -> None:
     sku: str = str(info_produto.get("sku", ""))
 
     # ===== Helpers =====
+
+    def remove_milhar_pt(s: str) -> str:
+        """
+        Remove apenas pontos que são separadores de milhar no padrão PT-BR.
+        Ex.: '2.349,92' -> '2349,92' ; '1.997,52' -> '1997,52'
+        (não mexe em outros pontos que não estejam nessa posição)
+        """
+        if not isinstance(s, str):
+            s = str(s) if s is not None else ""
+        s = s.strip()
+        # ponto antes de exatamente 3 dígitos e seguido de vírgula ou fim
+        return re.sub(r"\.(?=\d{3}(?:,|$))", "", s)
+
     def parse_money(val: Any) -> float:
+        """
+        Converte '2.349,92' / '2349,92' -> 2349.92 (float), sem jamais perder escala.
+        """
         if pd.isna(val) or str(val).strip() == "":
             return 0.0
-        s = str(val).strip().replace(".", "").replace(",", ".")
+        s = remove_milhar_pt(str(val))
+        s = s.replace(",", ".")
         try:
             return round(float(s), 2)
         except Exception:
             return 0.0
+
+    def fmt_brl(num: float | int | None) -> str:
+        """2349.92 -> '2349,92' (sem separador de milhar)."""
+        if num is None or (isinstance(num, float) and pd.isna(num)):
+            return ""
+        try:
+            return f"{float(num):.2f}".replace(".", ",")
+        except Exception:
+            return ""
 
     def limpar(valor: Any) -> str:
         return "" if pd.isna(valor) else str(valor).strip()
@@ -4774,7 +4798,11 @@ def importar_planilha_pedidos_guru() -> None:
 
         try:
             # campos base da planilha Guru
-            valor_venda: float = parse_money(linha.get("valor venda", ""))
+            valor_venda_str: str = remove_milhar_pt(
+                str(linha.get("valor venda", "")).strip()
+            )  # '2.349,92' -> '2349,92'
+            valor_venda: float = parse_money(valor_venda_str)  # -> 2349.92
+
             nome_prod: str = str(linha.get("nome produto", ""))
             id_prod: str = str(linha.get("id produto", ""))
             assinatura_codigo: str = (
@@ -4795,13 +4823,13 @@ def importar_planilha_pedidos_guru() -> None:
                 else:
                     base = float(valor_venda)
                 div: int = divisor_para(tipo_ass, periodicidade)
-                valor_unitario: float = round(base / max(div, 1), 2)
-                valor_total_item: float = valor_unitario  # qtd = 1
+                valor_unitario_f: float = round(base / max(div, 1), 2)
+                valor_total_item_f: float = valor_unitario_f  # qtd = 1
             else:
-                valor_unitario = valor_venda
-                valor_total_item = valor_venda
+                valor_unitario_f = valor_venda
+                valor_total_item_f = valor_venda
 
-            total_pedido: float = valor_venda  # sempre o valor efetivamente pago
+            total_pedido_f: float = valor_venda  # sempre o valor efetivamente pago
 
             cpf: str = limpar(linha.get("doc contato")).zfill(11)
             cep: str = limpar(linha.get("cep contato")).zfill(8)[:8]
@@ -4834,9 +4862,10 @@ def importar_planilha_pedidos_guru() -> None:
                     "SKU": sku,
                     "Un": "UN",
                     "Quantidade": "1",
-                    "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
-                    "Valor Total": f"{valor_total_item:.2f}".replace(".", ","),
-                    "Total Pedido": f"{total_pedido:.2f}".replace(".", ","),
+                    # >>> valores BR prontos (sem milhar, vírgula decimal) <<<
+                    "Valor Unitário": fmt_brl(valor_unitario_f),
+                    "Valor Total": fmt_brl(valor_total_item_f),
+                    "Total Pedido": fmt_brl(total_pedido_f),
                     "Valor Frete Pedido": "",
                     "Valor Desconto Pedido": "",
                     "Outras despesas": "",
@@ -4873,11 +4902,23 @@ def importar_planilha_pedidos_guru() -> None:
         return
 
     df_importado: pd.DataFrame = pd.DataFrame(registros)
+
+    # Padroniza colunas (NÃO mexe mais em monetários aqui)
     df_importado = padronizar_planilha_bling(df_importado)
+
+    # Garante novamente o formato BR sem milhar (caso algo mexa depois)
+    for col in ["Valor Unitário", "Valor Total", "Total Pedido"]:
+        if col in df_importado.columns:
+            df_importado[col] = (
+                df_importado[col].astype(str).str.replace(".", "", regex=False)
+            )  # remove milhar residual
+            # se houver perdido vírgula, repõe 2 casas (somente quando a string for só dígitos)
+            df_importado[col] = df_importado[col].apply(
+                lambda s: (f"{float(s.replace(',', '.')):.2f}".replace(".", ",")) if re.search(r"\d", s) else s
+            )
 
     # estado é global e possivelmente sem tipo -> cast local
     estado_map: dict[str, Any] = cast(dict[str, Any], estado)
-
     if "df_planilha_parcial" not in estado_map:
         estado_map["df_planilha_parcial"] = pd.DataFrame()
 
@@ -7035,11 +7076,42 @@ class ColetarPedidosShopify(QRunnable):
                 continue
 
             # desmembrar componentes → TODOS herdam o mesmo line_item_id
-            comp_list = cast(list[dict[str, Any]], info.get("composto_de") or [])
+            raw_comp = info.get("composto_de") or []
+
+            # Normaliza para lista de componentes
+            if isinstance(raw_comp, str):
+                # permite "SKU1, SKU2 x 2; SKU3*3"
+                comp_list_any: list[Any] = [s.strip() for s in re.split(r"[;,]", raw_comp) if s.strip()]
+            elif isinstance(raw_comp, list):
+                comp_list_any = raw_comp
+            else:
+                comp_list_any = []
+
             add_any = False
-            for comp in comp_list:
-                comp_sku = str(comp.get("sku") or comp.get("SKU") or "").strip()
-                comp_qty = int(comp.get("qtd") or comp.get("quantity") or 1)
+
+            for comp in comp_list_any:
+                comp_sku = ""
+                comp_qty = 1
+
+                if isinstance(comp, dict):
+                    comp_sku = str(comp.get("sku") or comp.get("SKU") or "").strip()
+                    try:
+                        comp_qty = int(comp.get("qtd") or comp.get("quantity") or 1)
+                    except Exception:
+                        comp_qty = 1
+
+                elif isinstance(comp, str):
+                    # aceita "SKU", "SKU x 2", "SKU*2"
+                    m = re.match(r"^\s*([A-Za-z0-9._\-]+)\s*(?:[xX\*]\s*(\d+))?\s*$", comp)
+                    if m:
+                        comp_sku = m.group(1).strip()
+                        if m.group(2):
+                            comp_qty = int(m.group(2))
+
+                else:
+                    logger.warning("componente_tipo_inesperado", extra={"tipo": type(comp).__name__, "combo": sku_li})
+                    continue
+
                 if comp_sku:
                     itens_expandidos.append(
                         {
@@ -7047,10 +7119,11 @@ class ColetarPedidosShopify(QRunnable):
                             "quantity": comp_qty * qty_li,
                             "from_combo": sku_li,
                             "is_combo_component": True,
-                            "line_item_id": line_item_id,  # ✅ mesmo id para todas as linhas do combo
+                            "line_item_id": line_item_id,  # ✅ mesmo id p/ todas as linhas do combo
                         }
                     )
                     add_any = True
+
             if not add_any:
                 # fallback: sem componentes válidos, mantém o combo “inteiro”
                 itens_expandidos.append(
@@ -9135,7 +9208,6 @@ def salvar_planilha_bling(df: pd.DataFrame, output_path: str) -> None:
         df_final.sort_values(by=["Transportadora", "Conjunto Produtos"], inplace=True)
 
     # Numeração por lote (se houver)
-
     if "ID Lote" in df_final.columns:
         parent = QApplication.activeWindow() or QWidget()
         numero_inicial, ok = QInputDialog.getInt(
@@ -9158,18 +9230,30 @@ def salvar_planilha_bling(df: pd.DataFrame, output_path: str) -> None:
         df_final["Número pedido"] = ""
 
     # Converte valores e calcula Total Pedido
-    df_final["Valor Total"] = df_final["Valor Total"].astype(str).str.replace(",", ".", regex=False)
+    # Aceita tanto entradas com vírgula quanto floats; evita quebrar se já for número
+    if df_final["Valor Total"].dtype != "float64" and df_final["Valor Total"].dtype != "int64":
+        df_final["Valor Total"] = df_final["Valor Total"].astype(str).str.replace(",", ".", regex=False)
     df_final["Valor Total"] = pd.to_numeric(df_final["Valor Total"], errors="coerce")
 
-    if df_final["Número pedido"].notna().any():
-        total_por_pedido: pd.DataFrame = (
-            df_final.groupby("Número pedido", sort=False, as_index=False)["Valor Total"].sum().to_frame("Total Pedido")
+    # Máscara para pedidos válidos (nem NaN nem "")
+    tem_pedido_valido = df_final["Número pedido"].notna() & df_final["Número pedido"].astype(str).str.strip().ne("")
+
+    if tem_pedido_valido.any():
+        # soma por pedido apenas nas linhas válidas
+        total_por_pedido = (
+            df_final.loc[tem_pedido_valido]
+            .groupby("Número pedido", sort=False)["Valor Total"]
+            .sum()
+            .reset_index(name="Total Pedido")
         )
+
+        # Evita coluna duplicada antes de mesclar
         if "Total Pedido" in df_final.columns:
-            df_final.drop(columns=["Total Pedido"], inplace=True)
+            df_final.drop(columns=["Total Pedido"], inplace=True, errors="ignore")
+
         df_final = pd.merge(df_final, total_por_pedido, on="Número pedido", how="left")
     else:
-        df_final["Total Pedido"] = ""
+        df_final["Total Pedido"] = pd.NA
 
     # Aviso sobre frete ausente (não bloqueia exportação)
     faltando_frete = df_final[
@@ -9185,7 +9269,10 @@ def salvar_planilha_bling(df: pd.DataFrame, output_path: str) -> None:
             f"{len(faltando_frete)} item(ns) estão sem frete cotado. Eles serão exportados mesmo assim.",
         )
 
-    # Formata valores
+    # >>> A PARTIR DAQUI, FORMATAÇÃO APENAS PARA EXIBIÇÃO/EXPORTAÇÃO <<<
+    # Mantém números como floats; se quiser saída com vírgula para o Excel apenas visualmente,
+    # use formatos no Excel ou formate aqui em string (mas isso vira texto no arquivo).
+    # Abaixo mantém como string com vírgula (se você realmente precisar assim):
     df_final["Valor Total"] = df_final["Valor Total"].map(
         lambda x: f"{x:.2f}".replace(".", ",") if pd.notnull(x) else ""
     )

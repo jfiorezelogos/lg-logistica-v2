@@ -1688,6 +1688,112 @@
         "Assinatura 3 anos (mensal) - mensal",
         "Assinatura Anual (mensal) - mensal"
       ]
+    },
+    {
+      "id": "c17c6339-55ab-477c-8ab9-37d13cfad400",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Isagoge"
+      },
+      "cupom": {
+        "nome": "DIREITO"
+      },
+      "assinaturas": [
+        "Assinatura 18 Meses - mensal (mensal)",
+        "Assinatura 2 anos (bimestral) - bimestral",
+        "Assinatura 2 anos (mensal) - mensal",
+        "Assinatura 3 anos (bimestral) - bimestral",
+        "Assinatura 3 anos (mensal) - mensal",
+        "Assinatura Anual (bimestral) - bimestral",
+        "Assinatura Anual (mensal) - mensal"
+      ]
+    },
+    {
+      "id": "9d522a7b-22a9-4cbd-8f5a-cf80909043c9",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "O Príncipe"
+        ]
+      },
+      "cupom": {
+        "nome": "DIREITO"
+      },
+      "assinaturas": [
+        "Assinatura 18 Meses - mensal (mensal)",
+        "Assinatura 2 anos (bimestral) - bimestral",
+        "Assinatura 2 anos (mensal) - mensal",
+        "Assinatura 3 anos (bimestral) - bimestral",
+        "Assinatura 3 anos (mensal) - mensal",
+        "Assinatura Anual (bimestral) - bimestral",
+        "Assinatura Anual (mensal) - mensal"
+      ]
+    },
+    {
+      "id": "21f8c89d-f25c-4798-99cb-3b9a38d4adc9",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "GRAZI15"
+      },
+      "assinaturas": [
+        "Assinatura 18 Meses - mensal (mensal)",
+        "Assinatura 2 anos (bimestral) - bimestral",
+        "Assinatura 2 anos (mensal) - mensal",
+        "Assinatura 3 anos (bimestral) - bimestral",
+        "Assinatura 3 anos (mensal) - mensal",
+        "Assinatura Anual (bimestral) - bimestral",
+        "Assinatura Anual (mensal) - mensal"
+      ]
+    },
+    {
+      "id": "6ce355b7-38cb-46ed-abc1-4da508f56844",
+      "applies_to": "cupom",
+      "action": {
+        "type": "alterar_box",
+        "box": "Banquete"
+      },
+      "cupom": {
+        "nome": "AMORES"
+      },
+      "assinaturas": [
+        "Assinatura 18 Meses - mensal (mensal)",
+        "Assinatura 2 anos (bimestral) - bimestral",
+        "Assinatura 2 anos (mensal) - mensal",
+        "Assinatura 3 anos (bimestral) - bimestral",
+        "Assinatura 3 anos (mensal) - mensal",
+        "Assinatura Anual (bimestral) - bimestral",
+        "Assinatura Anual (mensal) - mensal"
+      ]
+    },
+    {
+      "id": "4108bc40-d464-4666-ada7-e724fb42f84a",
+      "applies_to": "cupom",
+      "action": {
+        "type": "adicionar_brindes",
+        "brindes": [
+          "Santo Agostinho"
+        ]
+      },
+      "cupom": {
+        "nome": "AMORES"
+      },
+      "assinaturas": [
+        "Assinatura 18 Meses - mensal (mensal)",
+        "Assinatura 2 anos (bimestral) - bimestral",
+        "Assinatura 3 anos (bimestral) - bimestral",
+        "Assinatura 2 anos (mensal) - mensal",
+        "Assinatura 3 anos (mensal) - mensal",
+        "Assinatura Anual (mensal) - mensal",
+        "Assinatura Anual (bimestral) - bimestral"
+      ]
     }
   ]
 }
