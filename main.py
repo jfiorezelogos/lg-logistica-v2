@@ -613,14 +613,35 @@ def iniciar_mapeamento_produtos_guru(
     class DialogoMapeamento(QDialog):
         def __init__(self) -> None:
             super().__init__()
-            super().__init__()
             self.setWindowTitle("Mapear Produtos do Guru para Produtos Internos")
             self.setMinimumSize(800, 500)
             self.main_layout = QVBoxLayout(self)
 
             # mantém referências
             self.skus_info: MutableMapping[str, Any] = cast(MutableMapping[str, Any], skus_info)
-            self.produtos: list[dict[str, Any]] = [dict(p) for p in (produtos_guru or [])]
+
+            # helper para is_hidden
+            def _is_hidden(p: Mapping[str, Any]) -> bool:
+                raw = p.get("is_hidden", 0)
+                # aceita 0/1, "0"/"1", True/False
+                if isinstance(raw, str):
+                    raw = raw.strip().lower()
+                    if raw in {"true", "t", "yes", "y"}:
+                        return True
+                    if raw in {"false", "f", "no", "n", ""}:
+                        return False
+                    if raw.isdigit():
+                        return int(raw) != 0
+                    return bool(raw)  # fallback
+                if isinstance(raw, int | float):  # ← antes: (int, float)
+                    return int(raw) != 0
+                return bool(raw)
+
+            # filtra produtos visíveis (is_hidden = 0)
+            base_produtos = [dict(p) for p in (produtos_guru or [])]
+            visiveis = [p for p in base_produtos if not _is_hidden(p)]
+
+            self.produtos: list[dict[str, Any]] = visiveis
             self.produtos_restantes: list[dict[str, Any]] = list(self.produtos)
 
             # Seletor de produto interno (não permite digitar)
@@ -637,19 +658,21 @@ def iniciar_mapeamento_produtos_guru(
             self.main_layout.addWidget(QLabel("Selecione os produtos do Guru a associar:"))
             self.main_layout.addWidget(self.lista)
 
-            # Tipo: assinatura ou produto
+            # Tipo: assinatura, produto, combo, brinde
             linha_tipo: QHBoxLayout = QHBoxLayout()
             self.radio_produto = QRadioButton("Produto")
             self.radio_assinatura = QRadioButton("Assinatura")
             self.radio_combo = QRadioButton("Combo")
+            self.radio_brinde = QRadioButton("Brinde")
             self.radio_produto.setChecked(True)
             self.grupo_tipo = QButtonGroup()
-            for rb in (self.radio_produto, self.radio_assinatura, self.radio_combo):
+            for rb in (self.radio_produto, self.radio_assinatura, self.radio_combo, self.radio_brinde):
                 self.grupo_tipo.addButton(rb)
             linha_tipo.addWidget(QLabel("Tipo:"))
             linha_tipo.addWidget(self.radio_produto)
             linha_tipo.addWidget(self.radio_assinatura)
             linha_tipo.addWidget(self.radio_combo)
+            linha_tipo.addWidget(self.radio_brinde)
             self.main_layout.addLayout(linha_tipo)
 
             # Assinatura: duração + periodicidade
@@ -671,6 +694,8 @@ def iniciar_mapeamento_produtos_guru(
             # Recarrega nomes internos quando muda o tipo
             self.radio_assinatura.toggled.connect(lambda _checked: self._on_tipo_changed())
             self.radio_produto.toggled.connect(lambda _checked: self._on_tipo_changed())
+            self.radio_combo.toggled.connect(lambda _checked: self._on_tipo_changed())
+            self.radio_brinde.toggled.connect(lambda _checked: self._on_tipo_changed())
 
             # Botões
             botoes: QHBoxLayout = QHBoxLayout()
@@ -687,6 +712,14 @@ def iniciar_mapeamento_produtos_guru(
             self._recarregar_combo_interno()
             self.iniciar()
 
+            # Preencher combo "Produto (Guru)" apenas com visíveis
+            # (se quiser manter esse seletor em outra parte da UI)
+            # Exemplo: se você tiver combo_produto_guru aqui, adicione:
+            # self.combo_produto_guru = QComboBox()
+            # for p in self.produtos:  # já filtrados
+            #     texto = f'{p.get("name","") or p.get("id","")}  [{p.get("id","")}]'
+            #     self.combo_produto_guru.addItem(texto, p.get("id"))
+
         # ----- helpers -----
         def _on_tipo_changed(self) -> None:
             self.widget_assinatura.setVisible(self.radio_assinatura.isChecked())
@@ -694,15 +727,20 @@ def iniciar_mapeamento_produtos_guru(
 
         def _nomes_internos_para_tipo(self) -> list[str]:
             if self.radio_assinatura.isChecked():
-                return sorted(
-                    [
-                        n
-                        for n, info in self.skus_info.items()
-                        if cast(Mapping[str, Any], info).get("tipo") == "assinatura"
-                    ]
-                )
+                tipo_alvo = "assinatura"
+            elif self.radio_combo.isChecked():
+                tipo_alvo = "combo"
+            elif self.radio_brinde.isChecked():
+                tipo_alvo = "brinde"
+            else:
+                tipo_alvo = "produto"
+
             return sorted(
-                [n for n, info in self.skus_info.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura"]
+                [
+                    n
+                    for n, info in self.skus_info.items()
+                    if str(cast(Mapping[str, Any], info).get("tipo", "")).strip().lower() == tipo_alvo
+                ]
             )
 
         def _recarregar_combo_interno(self) -> None:
@@ -715,7 +753,7 @@ def iniciar_mapeamento_produtos_guru(
         def iniciar(self) -> None:
             self.lista.clear()
             termo = ""  # sem filtro por enquanto
-            for p in self.produtos:
+            for p in self.produtos:  # já filtrados por is_hidden = 0
                 titulo = (p.get("name") or "").strip()
                 product_id = str(p.get("id") or "").strip()
                 market_id = str(p.get("marketplace_id") or "").strip()
@@ -749,6 +787,8 @@ def iniciar_mapeamento_produtos_guru(
             novos_ids = [gid for gid in novos_ids if gid]
 
             is_assinatura = self.radio_assinatura.isChecked()
+            is_combo = self.radio_combo.isChecked()
+            is_brinde = self.radio_brinde.isChecked()
 
             # ---- normalizadores auxiliares ----
             DUR_LABEL_TO_MONTHS = {
@@ -763,11 +803,9 @@ def iniciar_mapeamento_produtos_guru(
             PERIODS_OK = {"mensal", "bimestral"}
 
             if is_assinatura:
-                # coleta UI
                 duracao_lbl = (self.combo_duracao.currentText() or "").strip().lower()
                 periodicidade = (self.combo_periodicidade.currentText() or "").strip().lower()
 
-                # validações simples
                 if periodicidade not in PERIODS_OK:
                     QMessageBox.warning(self, "Aviso", "Periodicidade inválida. Selecione 'mensal' ou 'bimestral'.")
                     return
@@ -775,7 +813,6 @@ def iniciar_mapeamento_produtos_guru(
                     QMessageBox.warning(self, "Aviso", f"Duração inválida: {duracao_lbl}")
                     return
 
-                # saneia nome base: remove sufixos repetidos de periodicidade no fim
                 nome_base = re.sub(
                     r"(?:\s*(?:\((?:mensal|bimestral)\)|-\s*(?:mensal|bimestral)))+$",
                     "",
@@ -783,14 +820,12 @@ def iniciar_mapeamento_produtos_guru(
                     flags=re.IGNORECASE,
                 ).strip()
 
-                # chave final padronizada
                 dest_key = f"{nome_base} ({periodicidade})"
             else:
                 duracao_lbl = None
                 periodicidade = None
                 dest_key = nome_base_raw
 
-            # migração legado (sem sufixo -> com sufixo) somente se assinatura
             if is_assinatura and dest_key != nome_base_raw and nome_base_raw in self.skus_info:
                 legado = cast(Mapping[str, Any], self.skus_info.pop(nome_base_raw) or {})
                 alvo = cast(MutableMapping[str, Any], self.skus_info.setdefault(dest_key, {}))
@@ -815,13 +850,19 @@ def iniciar_mapeamento_produtos_guru(
                 entrada.setdefault("peso", 0.0)
                 entrada.setdefault("composto_de", [])
             else:
-                if self.radio_combo.isChecked():
+                if is_combo:
                     entrada["tipo"] = "combo"
+                elif is_brinde:
+                    entrada["tipo"] = "brinde"
                 else:
                     entrada["tipo"] = "produto"
+
                 entrada.pop("recorrencia", None)
                 entrada.pop("duracao_meses", None)
                 entrada.pop("periodicidade", None)
+                entrada.setdefault("sku", entrada.get("sku", ""))
+                entrada.setdefault("peso", entrada.get("peso", 0.0))
+                entrada.setdefault("composto_de", entrada.get("composto_de", []))
 
             entrada.setdefault("guru_ids", [])
             ja = set(map(str, cast(Sequence[Any], entrada["guru_ids"])))
@@ -964,16 +1005,23 @@ class RuleEditorDialog(QDialog):
         self.combo_box.addItems(sorted(produtos_simples))
         layout_alt.addWidget(self.combo_box)
 
-        # adicionar_brindes → múltiplos brindes (qualquer item não-assinatura)
+        # adicionar_brindes → múltiplos itens simples (qualquer item NÃO-assinatura e NÃO-combo)
         self.widget_brindes = QWidget()
         layout_br: QVBoxLayout = QVBoxLayout(self.widget_brindes)
         layout_br.setContentsMargins(0, 0, 0, 0)
         self.lista_brindes = QListWidget()
         self.lista_brindes.setSelectionMode(QAbstractItemView.MultiSelection)
-        brindes = [n for n, info in self.skus_info.items() if cast(Mapping[str, Any], info).get("tipo") != "assinatura"]
-        for nome in sorted(brindes):
+
+        itens_simples_para_brinde = [
+            n
+            for n, info in self.skus_info.items()
+            if str(cast(Mapping[str, Any], info).get("tipo", "")).lower() != "assinatura"
+            and not cast(Mapping[str, Any], info).get("composto_de")  # exclui combos
+        ]
+        for nome in sorted(itens_simples_para_brinde):
             self.lista_brindes.addItem(QListWidgetItem(nome))
-        layout_br.addWidget(QLabel("Brindes a adicionar:"))
+
+        layout_br.addWidget(QLabel("Brindes a adicionar (produtos simples):"))
         layout_br.addWidget(self.lista_brindes)
 
         layout_acao.addWidget(self.widget_alterar)
@@ -1121,6 +1169,22 @@ class RuleEditorDialog(QDialog):
             if not brindes_sel:
                 QMessageBox.warning(self, "Validação", "Selecione ao menos um brinde.")
                 return
+            # valida: todos os selecionados devem ser NÃO-assinatura e NÃO-combo
+            invalidos = []
+            for b in brindes_sel:
+                inf = cast(Mapping[str, Any], self.skus_info.get(b, {}))
+                tipo_b = str(inf.get("tipo", "")).lower()
+                eh_assin = tipo_b == "assinatura"
+                eh_combo = bool(inf.get("composto_de"))
+                if eh_assin or eh_combo:
+                    invalidos.append(b)
+            if invalidos:
+                QMessageBox.warning(
+                    self,
+                    "Validação",
+                    "Os itens a seguir não podem ser usados como brinde (assinatura/combo): " + ", ".join(invalidos),
+                )
+                return
 
         # ===== Construção do objeto da regra =====
         rid = self.regra.get("id")
@@ -1128,6 +1192,7 @@ class RuleEditorDialog(QDialog):
             try:
                 rid = gerar_uuid()
             except NameError:
+                import uuid
 
                 rid = str(uuid.uuid4())
 
@@ -1200,6 +1265,14 @@ class RuleManagerDialog(QDialog):
 
         layout: QVBoxLayout = QVBoxLayout(self)
 
+        # 🔎 Barra de busca
+        linha_busca: QHBoxLayout = QHBoxLayout()
+        self.input_search = QLineEdit(self)
+        self.input_search.setPlaceholderText("Buscar por cupom / oferta / tipo de ação...")
+        linha_busca.addWidget(QLabel("Pesquisar:"))
+        linha_busca.addWidget(self.input_search)
+        layout.addLayout(linha_busca)
+
         # ===== Abas com tabelas =====
         self.tabs: QTabWidget = QTabWidget(self)
         layout.addWidget(self.tabs)
@@ -1261,6 +1334,7 @@ class RuleManagerDialog(QDialog):
         self.btn_up.clicked.connect(self._up)
         self.btn_down.clicked.connect(self._down)
         self.btn_salvar.clicked.connect(self._salvar)
+        self.input_search.textChanged.connect(lambda _txt: self._refresh_tables(self.input_search.text()))
 
         # índices e preenchimento
         self._build_indices()
@@ -1368,7 +1442,6 @@ class RuleManagerDialog(QDialog):
                     or "?"
                 )
                 itens.append({"nome": nome, "qtd": int(qtd)})
-
         agg: OrderedDict[str, int] = OrderedDict()
         for it in itens:
             agg[it["nome"]] = agg.get(it["nome"], 0) + it["qtd"]
@@ -1382,10 +1455,74 @@ class RuleManagerDialog(QDialog):
                 return str(action[k]).strip()
         return ""
 
+    # ---------- chaves / upsert / dedup ----------
+    def _rule_key(self, r: Mapping[str, Any]) -> tuple[str, str, str]:
+        """
+        Chave de upsert/dedup:
+        - cupom:  ("cupom", CUPOM.NOME (upper/trim), action.type)
+        - oferta: ("oferta", oferta.oferta_id,          action.type)
+        """
+        applies = (r.get("applies_to") or "oferta").strip().lower()
+        a = r.get("action") or {}
+        action_type = str(a.get("type") or a.get("acao") or "").strip().lower()
+        if applies == "cupom":
+            cupom_nome = str((r.get("cupom") or {}).get("nome") or "").strip().upper()
+            return ("cupom", cupom_nome, action_type)
+        else:
+            of = r.get("oferta") or {}
+            oferta_id = str(of.get("oferta_id") or of.get("id") or "").strip()
+            return ("oferta", oferta_id, action_type)
+
+    def _index_by_key(self) -> dict[tuple[str, str, str], int]:
+        """Mapeia chave -> índice em estado['rules'] (última ocorrência vence)."""
+        idx: dict[tuple[str, str, str], int] = {}
+        for i, r in enumerate(self.estado.get("rules", [])):
+            idx[self._rule_key(r)] = i
+        return idx
+
+    def _upsert_rule(self, nova: dict[str, Any]) -> int:
+        """
+        Insere ou substitui regra por chave composta (retorna índice final).
+        Mantém agrupamento por applies_to: se substituir, preserva a posição;
+        se inserir, coloca ao fim do grupo correspondente.
+        """
+        key = self._rule_key(nova)
+        rules = self.estado.setdefault("rules", [])
+        bykey = self._index_by_key()
+
+        if key in bykey:
+            i = bykey[key]
+            rules[i] = nova
+            return i
+
+        applies = key[0]  # "cupom" | "oferta"
+        insert_pos = len(rules)
+        for j in range(len(rules) - 1, -1, -1):
+            if (rules[j].get("applies_to") or "oferta").strip().lower() == applies:
+                insert_pos = j + 1
+                break
+        rules.insert(insert_pos, nova)
+        return insert_pos
+
+    def _dedup_inplace(self) -> None:
+        """Remove duplicados por chave mantendo a última ocorrência."""
+        seen: set[tuple[str, str, str]] = set()
+        deduped: list[dict[str, Any]] = []
+        for r in reversed(self.estado.get("rules", [])):
+            k = self._rule_key(r)
+            if k in seen:
+                continue
+            seen.add(k)
+            deduped.append(r)
+        deduped.reverse()
+        self.estado["rules"] = deduped
+
     # ---------- UI refresh ----------
-    def _refresh_tables(self) -> None:
+    def _refresh_tables(self, query: str = "") -> None:
         # reconstruir índices caso o estado tenha sido atualizado externamente
         self._build_indices()
+
+        q = (query or "").strip().lower()
 
         # zera as tabelas e mapas
         self.tbl_cupons.setRowCount(0)
@@ -1395,35 +1532,46 @@ class RuleManagerDialog(QDialog):
 
         for i, r in enumerate(self.estado["rules"]):
             a = r.get("action") or {}
-            if r.get("applies_to") == "cupom":
-                # colunas: Cupom | Tipo de ação | Box/Brindes | Plano
-                cupom = ((r.get("cupom") or {}).get("nome") or "").strip() or "—"
-                tipo = self._tipo_acao(a) or "—"
+            applies = (r.get("applies_to") or "oferta").strip().lower()
+
+            if applies == "cupom":
+                cupom = ((r.get("cupom") or {}).get("nome") or "").strip()
+                tipo = self._tipo_acao(a) or ""
                 box = self._pegar_box(a)
-                if tipo == "adicionar_brindes":
+                if self._tipo_acao(a) == "adicionar_brindes":
                     brindes = self._coletar_brindes(a)
                     box_ou_brindes = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes) or "—"
                 else:
                     box_ou_brindes = box or "—"
                 plano = self._format_assinaturas(r) or "—"
 
+                # 🔍 filtro
+                alvo = f"{cupom} {tipo} {box_ou_brindes} {plano}".lower()
+                if q and q not in alvo:
+                    continue
+
                 row = self.tbl_cupons.rowCount()
                 self.tbl_cupons.insertRow(row)
-                self.tbl_cupons.setItem(row, 0, QTableWidgetItem(cupom))
-                self.tbl_cupons.setItem(row, 1, QTableWidgetItem(tipo))
+                self.tbl_cupons.setItem(row, 0, QTableWidgetItem(cupom or "—"))
+                self.tbl_cupons.setItem(row, 1, QTableWidgetItem(tipo or "—"))
                 self.tbl_cupons.setItem(row, 2, QTableWidgetItem(box_ou_brindes))
                 self.tbl_cupons.setItem(row, 3, QTableWidgetItem(plano))
                 self._map_cupons.append(i)
 
-            else:  # oferta
-                # colunas: Nome da oferta | Brinde
+            else:
                 of = r.get("oferta") or {}
                 nome = (of.get("nome") or self._label_oferta(of.get("oferta_id")) or "—").strip()
+                tipo = self._tipo_acao(a) or ""
                 brinde = ""
-                if self._tipo_acao(a) == "adicionar_brindes":
+                if tipo == "adicionar_brindes":
                     brindes = self._coletar_brindes(a)
-                    brinde = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes)
+                    brinde = " | ".join(f"{b['qtd']}x {b['nome']}" for b in brindes) or "—"
                 brinde = brinde or "—"
+
+                # 🔍 filtro
+                alvo = f"{nome} {brinde} {tipo}".lower()
+                if q and q not in alvo:
+                    continue
 
                 row = self.tbl_ofertas.rowCount()
                 self.tbl_ofertas.insertRow(row)
@@ -1448,8 +1596,9 @@ class RuleManagerDialog(QDialog):
     def _add(self) -> None:
         dlg = RuleEditorDialog(self, self.skus_info, regra=None, produtos_guru=self.estado.get("produtos_guru"))
         if dlg.exec_() == QDialog.Accepted:
-            self.estado["rules"].append(dlg.get_regra())
-            self._refresh_tables()
+            idx = self._upsert_rule(dlg.get_regra())
+            self._refresh_tables(self.input_search.text())
+            self._reselect(idx)
 
     def _edit(self) -> None:
         idx = self._selected_index()
@@ -1458,9 +1607,9 @@ class RuleManagerDialog(QDialog):
         regra = self.estado["rules"][idx]
         dlg = RuleEditorDialog(self, self.skus_info, regra=regra, produtos_guru=self.estado.get("produtos_guru"))
         if dlg.exec_() == QDialog.Accepted:
-            self.estado["rules"][idx] = dlg.get_regra()
-            self._refresh_tables()
-            self._reselect(idx)
+            idx2 = self._upsert_rule(dlg.get_regra())
+            self._refresh_tables(self.input_search.text())
+            self._reselect(idx2)
 
     def _dup(self) -> None:
         idx = self._selected_index()
@@ -1468,8 +1617,9 @@ class RuleManagerDialog(QDialog):
             return
         r = json.loads(json.dumps(self.estado["rules"][idx]))  # deep copy
         r["id"] = gerar_uuid()
+        # duplicar SEM upsert (intencional, pois é uma cópia)
         self.estado["rules"].insert(idx + 1, r)
-        self._refresh_tables()
+        self._refresh_tables(self.input_search.text())
         self._reselect(idx + 1)
 
     def _del(self) -> None:
@@ -1481,7 +1631,7 @@ class RuleManagerDialog(QDialog):
             == QMessageBox.Yes
         ):
             del self.estado["rules"][idx]
-            self._refresh_tables()
+            self._refresh_tables(self.input_search.text())
 
     def _up(self) -> None:
         idx = self._selected_index()
@@ -1497,6 +1647,8 @@ class RuleManagerDialog(QDialog):
 
     def _salvar(self) -> None:
         try:
+            # dedup por chave composta, mantendo a última edição
+            self._dedup_inplace()
             salvar_regras(self.config_path, self.estado["rules"])
             QMessageBox.information(self, "Salvo", "Regras salvas em config_ofertas.json.")
         except Exception as e:
@@ -1504,26 +1656,25 @@ class RuleManagerDialog(QDialog):
 
     # ---------- movimento preservando o agrupamento ----------
     def _move_relative_in_group(self, idx_global: int, delta: int) -> None:
-        """Move a regra idx_global para cima/baixo, mas apenas trocando com vizinhos do MESMO grupo
-        (applies_to)."""
+        """Move a regra idx_global para cima/baixo, trocando apenas com vizinhos do MESMO grupo (applies_to)."""
         if not -1 <= delta <= 1 or delta == 0:
             return
         rules = self.estado["rules"]
         if not 0 <= idx_global < len(rules):
             return
-        group = rules[idx_global].get("applies_to") or "oferta"
+        group = (rules[idx_global].get("applies_to") or "oferta").strip().lower()
         j = idx_global + delta
-        while 0 <= j < len(rules) and (rules[j].get("applies_to") or "oferta") != group:
+        while 0 <= j < len(rules) and (rules[j].get("applies_to") or "oferta").strip().lower() != group:
             j += delta
         if 0 <= j < len(rules):
             rules[idx_global], rules[j] = rules[j], rules[idx_global]
-            self._refresh_tables()
+            self._refresh_tables(self.input_search.text())
             self._reselect(j)
 
     def _reselect(self, idx_global: int) -> None:
         """Após refresh, reposiciona a seleção na aba/tabela correspondente a idx_global."""
         r = self.estado["rules"][idx_global]
-        if r.get("applies_to") == "cupom":
+        if (r.get("applies_to") or "oferta").strip().lower() == "cupom":
             for row, gi in enumerate(self._map_cupons):
                 if gi == idx_global:
                     self.tabs.setCurrentWidget(self.tab_cupons)
@@ -3260,7 +3411,6 @@ def padronizar_planilha_bling(df: pd.DataFrame, preservar_extras: bool = True) -
         "Número pedido",
         "Nome Comprador",
         "Data",
-        "Data Pedido",
         "CPF/CNPJ Comprador",
         "Endereço Comprador",
         "Bairro Comprador",
@@ -3306,9 +3456,10 @@ def padronizar_planilha_bling(df: pd.DataFrame, preservar_extras: bool = True) -
         "Cupom",
         "periodicidade",
         "periodo",
-        # 👇 importantes p/ pipeline
-        "indisponivel",  # mantemos a marcação feita na coleta
-        "ID Lote",  # será preenchido no aplicar_lotes
+        "indisponivel",
+        "ID Lote",
+        "Data Pedido",
+        "is_upgrade",
     ]
 
     df_out = df.copy()
@@ -3339,12 +3490,13 @@ def gerar_linha_base_planilha(
     tipo_plano: str = "",
     subscription_id: str = "",
     cupom_valido: str = "",
+    *,
+    is_upgrade: bool = False,  # ← NOVO
 ) -> dict[str, Any]:
     telefone = contact.get("phone_number", "")
     return {
         # Comprador
         "Nome Comprador": contact.get("name", ""),
-        "Data Pedido": valores["data_pedido"].strftime("%d/%m/%Y"),
         "Data": QDate.currentDate().toString("dd/MM/yyyy"),
         "CPF/CNPJ Comprador": contact.get("doc", ""),
         "Endereço Comprador": contact.get("address", ""),
@@ -3392,6 +3544,8 @@ def gerar_linha_base_planilha(
         "ID Forma Pagamento": "",
         "transaction_id": valores["transaction_id"],
         "indisponivel": "",
+        "Data Pedido": valores["data_pedido"].strftime("%d/%m/%Y"),
+        "is_upgrade": "S" if is_upgrade else "",
     }
 
 
@@ -3403,70 +3557,199 @@ def desmembrar_combo_planilha(
     """
     - valores["produto_principal"] = nome do combo
     - valores["valor_total"]       = total do combo (float/int ou string com vírgula)
-    - skus_info[nome_combo]["composto_de"] = [SKUs...]
-    - skus_info[produto_simples]["sku"] = SKU do produto simples
+    - skus_info[nome_combo]["composto_de"] = componentes (str | dict) - "SKU", "SKU x 2", {"sku":"...", "qtd":2}
+    - skus_info[item]["tipo"]      = "produto" | "brinde" | "combo" | "assinatura"
+    - skus_info[nome_combo]["divisor"]     = opcional (int>=1)
     """
-    nome_combo: str = str(valores.get("produto_principal", ""))
-    info_combo: Mapping[str, Any] = skus_info.get(nome_combo, {})
-    skus_componentes: list[str] = [str(s).strip() for s in (info_combo.get("composto_de", []) or []) if str(s).strip()]
 
-    # Se não há componentes, retorna a linha original
-    if not skus_componentes:
-        return [linha_base]
-
-    # Helper: parse total (aceita 12,34 / 12.34 / 1.234,56)
+    # ------- helpers -------
     def _to_dec(v: Any) -> Decimal:
         if v is None:
             return Decimal("0.00")
-        if isinstance(v, int | float):
+        if isinstance(v, int | float):  # ← antes: (int, float)
             return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        s = str(v).strip()
-        s = s.replace(".", "").replace(",", ".")
+        s = str(v).strip().replace(".", "").replace(",", ".")
         try:
             return Decimal(s).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         except InvalidOperation:
             return Decimal("0.00")
 
-    total = _to_dec(valores.get("valor_total"))
-    n = len(skus_componentes)
-
-    # Se total <= 0, cria itens com 0,00
-    if total <= Decimal("0.00"):
-        linhas = []
-        for sku in skus_componentes:
-            nome_item = next(
-                (nome for nome, info in skus_info.items() if str(info.get("sku", "")) == sku),
-                sku,
-            )
-            nova = linha_base.copy()
-            nova["Produto"] = nome_item
-            nova["SKU"] = sku
-            nova["Valor Unitário"] = "0,00"
-            nova["Valor Total"] = "0,00"
-            nova["Combo"] = nome_combo  # remova se não quiser essa coluna
-            nova["indisponivel"] = "S" if produto_indisponivel(nome_item, sku=sku) else ""
-            linhas.append(nova)
-        return linhas
-
-    # Rateio uniforme com distribuição de centavos (garante soma == total)
-    quota = (total / n).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    subtotal = quota * (n - 1)
-    ultimo = (total - subtotal).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
     def _fmt(d: Decimal) -> str:
         return f"{d:.2f}".replace(".", ",")
 
-    linhas = []
-    for i, sku in enumerate(skus_componentes):
-        nome_item = next((nome for nome, info in skus_info.items() if info.get("sku") == sku), sku)
-        valor_item = quota if i < n - 1 else ultimo
+    def _info_by_sku_code(sku_code: str) -> tuple[str, Mapping[str, Any]]:
+        for nome, info in skus_info.items():
+            if str(info.get("sku", "")).strip() == sku_code:
+                return nome, info
+        return sku_code, {}
+
+    def _is_brinde_sku_code(sku_code: str) -> bool:
+        _, info = _info_by_sku_code(sku_code)
+        return str(info.get("tipo", "")).strip().lower() == "brinde"
+
+    def _parse_compostos(raw: Any) -> list[tuple[str, int]]:
+        out: list[tuple[str, int]] = []
+        if isinstance(raw, str):
+            parts = [s.strip() for s in re.split(r"[;,]", raw) if s.strip()]
+        elif isinstance(raw, list):
+            parts = raw
+        else:
+            parts = []
+        for c in parts:
+            if isinstance(c, dict):
+                sku = str(c.get("sku") or c.get("SKU") or "").strip()
+                try:
+                    q = int(c.get("qtd") or c.get("quantity") or 1)
+                except Exception:
+                    q = 1
+                if sku:
+                    out.append((sku, max(1, q)))
+            elif isinstance(c, str):
+                m = re.match(r"^\s*([A-Za-z0-9._\-]+)\s*(?:[xX\*]\s*(\d+))?\s*$", c)
+                if m:
+                    sku = m.group(1).strip()
+                    q = int(m.group(2)) if m.group(2) else 1
+                    out.append((sku, max(1, q)))
+        return out
+
+    def _get_divisor_explicito(info_combo: Mapping[str, Any]) -> int | None:
+        raw = info_combo.get("divisor")
+        if isinstance(raw, int):
+            return raw if raw >= 1 else None
+        if isinstance(raw, str) and raw.strip().isdigit():
+            v = int(raw.strip())
+            return v if v >= 1 else None
+        return None
+
+    def _get_transaction_id(linha: Mapping[str, Any]) -> str:
+        # cobre variações comuns de nome em planilhas
+        candidatos = [
+            "transaction_id",
+            "Transaction ID",
+            "TRANSACTION_ID",
+            "ID Transação",
+            "id transação",
+            "Id Transação",
+            "Id transação",
+            "id_transacao",
+            "id-transacao",
+        ]
+        for k in candidatos:
+            if k in linha and linha[k] is not None and str(linha[k]).strip():
+                return str(linha[k]).strip()
+        return ""  # no seu fluxo, tende a existir
+
+    def _finalizar_linha(nova: dict[str, Any], nome_combo: str) -> dict[str, Any]:
+        # marca e padroniza campos usados pelo pipeline
+        nova["Combo"] = nome_combo
+        nova["is_combo"] = True  # todas as linhas geradas por desmembramento são combos
+        nova["sku"] = str(nova.get("SKU", "")).strip()  # espelha para minúsculo
+        if "transaction_id" not in nova or not str(nova["transaction_id"]).strip():
+            nova["transaction_id"] = _get_transaction_id(linha_base)
+        return nova
+
+    # ------- dados de entrada -------
+    nome_combo: str = str(valores.get("produto_principal", ""))
+    info_combo: Mapping[str, Any] = skus_info.get(nome_combo, {}) or {}
+    componentes: list[tuple[str, int]] = _parse_compostos(info_combo.get("composto_de") or [])
+
+    # 🔹 marca combos explicitamente, mesmo sem componentes
+    eh_combo = str(info_combo.get("tipo", "")).strip().lower() == "combo"
+
+    if not componentes:
+        lb = linha_base.copy()
+        lb["is_combo"] = eh_combo  # True se tipo == "combo"
+        return [lb]
+
+    total_combo = _to_dec(valores.get("valor_total"))
+
+    # separa cobrados (não-brinde) e brindes
+    cobrados: list[tuple[str, int]] = []
+    brindes: list[tuple[str, int]] = []
+    for sku_code, qtd in componentes:
+        (brindes if _is_brinde_sku_code(sku_code) else cobrados).append((sku_code, qtd))
+
+    unidades_cobradas = sum(q for _, q in cobrados)
+    linhas: list[dict[str, Any]] = []
+
+    # Caso sem total ou sem itens cobrados → tudo zero
+    if total_combo <= Decimal("0.00") or unidades_cobradas == 0:
+        for sku_code, _qtd in componentes:
+            nome_item, _ = _info_by_sku_code(sku_code)
+            nova = linha_base.copy()
+            nova["Produto"] = nome_item
+            nova["SKU"] = sku_code
+            nova["Valor Unitário"] = "0,00"
+            nova["Valor Total"] = "0,00"
+            try:
+                nova["indisponivel"] = "S" if produto_indisponivel(nome_item, sku=sku_code) else ""
+            except Exception:
+                pass
+            linhas.append(_finalizar_linha(nova, nome_combo))
+        return linhas
+
+    # ---- comportamento com/sem divisor explícito ----
+    divisor_expl = _get_divisor_explicito(info_combo)
+    if divisor_expl is not None:
+        # ✅ MODO 1: DIVISOR EXPLÍCITO — NÃO fechar total agora.
+        valor_unit_bruto = total_combo / Decimal(divisor_expl)
+        valor_unit = valor_unit_bruto.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        for sku_code, qtd in cobrados:
+            nome_item, _ = _info_by_sku_code(sku_code)
+            total_item = (valor_unit * Decimal(qtd)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            nova = linha_base.copy()
+            nova["Produto"] = nome_item
+            nova["SKU"] = sku_code
+            nova["Valor Unitário"] = _fmt(valor_unit)
+            nova["Valor Total"] = _fmt(total_item)
+            try:
+                nova["indisponivel"] = "S" if produto_indisponivel(nome_item, sku=sku_code) else ""
+            except Exception:
+                pass
+            linhas.append(_finalizar_linha(nova, nome_combo))
+
+    else:
+        # ✅ MODO 2: FALLBACK — rateio por unidades não-brinde e FECHA o total no último item.
+        divisor_fallback = max(1, unidades_cobradas)
+        valor_unit_bruto = total_combo / Decimal(divisor_fallback)
+
+        soma_parcial = Decimal("0.00")
+        for idx, (sku_code, qtd) in enumerate(cobrados):
+            nome_item, _ = _info_by_sku_code(sku_code)
+            if idx < len(cobrados) - 1:
+                total_item = (valor_unit_bruto * Decimal(qtd)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                soma_parcial += total_item
+                valor_unit = valor_unit_bruto.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            else:
+                total_item = (total_combo - soma_parcial).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                valor_unit = valor_unit_bruto.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            nova = linha_base.copy()
+            nova["Produto"] = nome_item
+            nova["SKU"] = sku_code
+            nova["Valor Unitário"] = _fmt(valor_unit)
+            nova["Valor Total"] = _fmt(total_item)
+            try:
+                nova["indisponivel"] = "S" if produto_indisponivel(nome_item, sku=sku_code) else ""
+            except Exception:
+                pass
+            linhas.append(_finalizar_linha(nova, nome_combo))
+
+    # Brindes sempre 0,00
+    for sku_code, _qtd in brindes:
+        nome_item, _ = _info_by_sku_code(sku_code)
         nova = linha_base.copy()
         nova["Produto"] = nome_item
-        nova["SKU"] = sku
-        nova["Valor Unitário"] = _fmt(valor_item)
-        nova["Valor Total"] = _fmt(valor_item)
-        nova["Combo"] = nome_combo  # opcional
-        linhas.append(nova)
+        nova["SKU"] = sku_code
+        nova["Valor Unitário"] = "0,00"
+        nova["Valor Total"] = "0,00"
+        try:
+            nova["indisponivel"] = "S" if produto_indisponivel(nome_item, sku=sku_code) else ""
+        except Exception:
+            pass
+        linhas.append(_finalizar_linha(nova, nome_combo))
 
     return linhas
 
@@ -3639,6 +3922,7 @@ def montar_planilha_vendas_guru(
                 nome_produto = valores["produto_principal"]
                 info_combo = skus_info.get(nome_produto, {})
                 sku_produto = info_combo.get("sku", "")
+                eh_combo = str(info_combo.get("tipo", "")).strip().lower() == "combo"  # ← marcação explícita
 
                 linha_base = gerar_linha_base_planilha(contact, valores, transacao)
                 linha_base.update(
@@ -3661,6 +3945,8 @@ def montar_planilha_vendas_guru(
                     # 🚫 regra: combo indisponível + mapeado → não desmembrar
                     if indisponivel_combo and mapeado:
                         linha_base["indisponivel"] = "S"
+                        if eh_combo:
+                            linha_base["is_combo"] = True  # ← marca combo mesmo sem desmembrar
                         _append_linha(linha_base, valores["transaction_id"])
                     else:
                         for linha_item in desmembrar_combo_planilha(valores, linha_base, skus_info):
@@ -3674,6 +3960,9 @@ def montar_planilha_vendas_guru(
                             )
                             _append_linha(linha_item, valores["transaction_id"])
                 else:
+                    # ✅ sem composto_de: ainda pode ser tipo="combo"
+                    if eh_combo:
+                        linha_base["is_combo"] = True
                     _append_linha(linha_base, valores["transaction_id"])
 
             except Exception as e:
@@ -3723,10 +4012,12 @@ def montar_planilha_vendas_guru(
             print(
                 f"[DEBUG assinatura] subscription_id={subscription_id} primeira={grupo_ordenado[0].get('ordered_at') or grupo_ordenado[0].get('created_at')} ultima={grupo_ordenado[-1].get('ordered_at') or grupo_ordenado[-1].get('created_at')}"
             )
+            invoice_type = str(transacao_base.get("invoice", {}).get("type", "")).strip().lower()
+            is_upgrade = invoice_type == "upgrade"
             transacoes_principais = [t for t in grupo_ordenado if is_transacao_principal(t, ids_planos_validos)]
             produtos_distintos = {t.get("product", {}).get("internal_id") for t in transacoes_principais}
 
-            usar_valor_fixo = len(produtos_distintos) > 1 or transacao_base.get("invoice", {}).get("type") == "upgrade"
+            usar_valor_fixo = len(produtos_distintos) > 1 or is_upgrade
 
             if not transacoes_principais:
                 print(f"[⚠️ AVISO] Nenhuma transação principal encontrada para assinatura {subscription_id}")
@@ -3819,6 +4110,7 @@ def montar_planilha_vendas_guru(
                     tipo_plano=tipo_plano,
                     subscription_id=subscription_id,
                     cupom_valido=cupom_usado,
+                    is_upgrade=is_upgrade,
                 )
 
                 nome_produto_principal = (dados.get("box_nome") or "").strip() or valores["produto_principal"]
@@ -4845,7 +5137,6 @@ def importar_planilha_pedidos_guru() -> None:
                 {
                     "Número pedido": "",
                     "Nome Comprador": limpar(linha.get("nome contato")),
-                    "Data Pedido": data_pedido,
                     "Data": QDate.currentDate().toString("dd/MM/yyyy"),
                     "CPF/CNPJ Comprador": cpf,
                     "Endereço Comprador": limpar(linha.get("logradouro contato")),
@@ -4892,6 +5183,7 @@ def importar_planilha_pedidos_guru() -> None:
                     "periodicidade": periodicidade,
                     "Plano Assinatura": tipo_ass if is_assin else "",
                     "assinatura_codigo": assinatura_codigo,
+                    "Data Pedido": data_pedido,
                 }
             )
         except Exception as e:
@@ -5139,6 +5431,11 @@ def remover_pedidos_enviados() -> None:
     if "id transação" in df.columns and "transaction_id" not in df.columns:
         df["transaction_id"] = df["id transação"]
 
+    # ✅ SKU (pode vir como 'SKU' na planilha original; após lower vira 'sku')
+    if "sku" not in df.columns:
+        df["sku"] = ""
+    df["sku"] = df["sku"].astype(str).fillna("").str.strip()
+
     # normalizações só na cópia de trabalho (evita Series|str)
     if "subscription_id" not in df.columns:
         df["subscription_id"] = ""
@@ -5155,6 +5452,16 @@ def remover_pedidos_enviados() -> None:
     if "periodo" not in df.columns:
         df["periodo"] = -1
     df["periodo"] = pd.to_numeric(df["periodo"], errors="coerce").fillna(-1).astype(int)
+
+    # ✅ is_combo (normaliza para bool-like)
+    if "is_combo" not in df.columns:
+        df["is_combo"] = False
+
+    def _to_bool(v: Any) -> bool:
+        s = str(v).strip().lower()
+        return s in {"true", "1", "s", "sim", "t", "y", "yes"}
+
+    df["is_combo"] = df["is_combo"].map(_to_bool)
 
     # seleção do período (passa QWidget, não None)
     ano_atual: int = QDate.currentDate().year()
@@ -5175,37 +5482,42 @@ def remover_pedidos_enviados() -> None:
     caminho_excel = os.path.join(os.path.dirname(__file__), "Envios", "envios_log.xlsx")
     assinaturas_existentes: set[tuple[str, int, str, int]] = set()
     produtos_existentes: set[str] = set()
+    combos_existentes: set[str] = set()  # chave_dedup (transaction_id+sku)
 
     if os.path.exists(caminho_excel):
         try:
-            assinaturas_df = pd.read_excel(caminho_excel, sheet_name="assinaturas")
-            produtos_df = pd.read_excel(caminho_excel, sheet_name="produtos")
+            xls_all = pd.read_excel(caminho_excel, sheet_name=None)
+            assinaturas_df = xls_all.get("assinaturas", pd.DataFrame())
+            produtos_df = xls_all.get("produtos", pd.DataFrame())
+            combos_df = xls_all.get("combos", pd.DataFrame())
 
-            # garante colunas em assinaturas_df
+            # ----- assinaturas -----
             for col in ("subscription_id", "periodicidade", "periodo", "ano"):
                 if col not in assinaturas_df.columns:
                     assinaturas_df[col] = "" if col in ("subscription_id", "periodicidade") else -1
-
             assinaturas_df["subscription_id"] = assinaturas_df["subscription_id"].astype(str).str.strip()
             assinaturas_df["periodicidade"] = assinaturas_df["periodicidade"].astype(str).str.lower().str.strip()
             assinaturas_df["periodo"] = pd.to_numeric(assinaturas_df["periodo"], errors="coerce").fillna(-1).astype(int)
             assinaturas_df["ano"] = pd.to_numeric(assinaturas_df["ano"], errors="coerce").fillna(-1).astype(int)
-
             assinaturas_existentes = {
-                (
-                    str(row["subscription_id"]),
-                    int(row["ano"]),
-                    str(row["periodicidade"]),
-                    int(row["periodo"]),
-                )
+                (str(row["subscription_id"]), int(row["ano"]), str(row["periodicidade"]), int(row["periodo"]))
                 for _, row in assinaturas_df.iterrows()
                 if str(row.get("subscription_id", "")).strip() != ""
             }
 
-            # garante coluna em produtos_df
+            # ----- produtos (legacy por transaction_id inteiro) -----
             if "transaction_id" not in produtos_df.columns:
                 produtos_df["transaction_id"] = ""
             produtos_existentes = set(produtos_df["transaction_id"].astype(str).str.strip())
+
+            # ----- combos (dedup por transaction_id + sku) -----
+            if not combos_df.empty:
+                if "chave_dedup" in combos_df.columns:
+                    combos_existentes = set(combos_df["chave_dedup"].astype(str).str.strip())
+                else:
+                    tx = combos_df.get("transaction_id", pd.Series(dtype=str)).astype(str).str.strip()
+                    sk = combos_df.get("sku", pd.Series(dtype=str)).astype(str).str.strip()
+                    combos_existentes = set((tx + "+" + sk).tolist())
 
         except Exception as e:
             print(f"[⚠️] Erro ao ler Excel: {e}")
@@ -5215,7 +5527,15 @@ def remover_pedidos_enviados() -> None:
     def deve_remover(row: pd.Series) -> bool:
         id_sub = str(row.get("subscription_id", "")).strip()
         id_trans = str(row.get("transaction_id", "")).strip()
+        sku_row = str(row.get("sku", "")).strip()
+        is_combo = bool(row.get("is_combo", False))
 
+        # 0) combos explícitos por flag
+        if is_combo and id_trans and sku_row:
+            chave = f"{id_trans}+{sku_row}"
+            return chave in combos_existentes
+
+        # 1) assinaturas (por periodicidade/periodo/ano)
         if id_sub:
             per = str(row.get("periodicidade", "")).strip().lower()
             if per == "mensal":
@@ -5226,6 +5546,13 @@ def remover_pedidos_enviados() -> None:
                 return False
             return (id_sub, int(ano), per, int(per_num)) in assinaturas_existentes
 
+        # 2) fallback histórico: combos deduzidos por trans+sku
+        if id_trans and sku_row:
+            chave = f"{id_trans}+{sku_row}"
+            if chave in combos_existentes:
+                return True
+
+        # 3) produtos (legacy) por transaction_id inteiro
         if id_trans:
             return id_trans in produtos_existentes
 
@@ -5234,7 +5561,6 @@ def remover_pedidos_enviados() -> None:
     mask_remover: pd.Series = df.apply(deve_remover, axis=1).astype(bool)
 
     # -- aplica a máscara no DataFrame ORIGINAL, preservando schema/casos/acentos --
-    # usa a própria Series booleana (não ~mask_remover.values)
     df_filtrado: pd.DataFrame = df_orig.loc[~mask_remover].copy()
 
     removidas: int = linhas_antes - len(df_filtrado)
@@ -5259,13 +5585,22 @@ def registrar_envios(
 
     df = df.copy()
     # ✅ Garantias
-    for col in ("indisponivel", "subscription_id", "origem"):
+    for col in ("indisponivel", "subscription_id", "origem", "transaction_id", "sku", "is_combo"):
         if col not in df.columns:
             df[col] = ""
 
     df["indisponivel"] = df["indisponivel"].astype(str)
     df["subscription_id"] = df["subscription_id"].astype(str).str.strip()
     df["origem"] = df["origem"].astype(str).str.lower().str.strip()
+    df["transaction_id"] = df["transaction_id"].astype(str).str.strip()
+    df["sku"] = df["sku"].astype(str).str.strip()
+
+    # normaliza is_combo → bool (aceita "S/sim/true/1")
+    def _to_bool(v: Any) -> bool:
+        s = str(v).strip().lower()
+        return s in {"true", "1", "s", "sim", "t", "y", "yes"}
+
+    df["is_combo"] = df["is_combo"].map(_to_bool) if "is_combo" in df.columns else False
 
     # Remove indisponíveis
     df = df[~df["indisponivel"].str.upper().eq("S")].copy()
@@ -5275,13 +5610,16 @@ def registrar_envios(
 
     registros_assinaturas: list[dict[str, Any]] = []
     registros_produtos: list[dict[str, Any]] = []
+    registros_combos: list[dict[str, Any]] = []  # ← combos
     registro_em: str = local_now().strftime("%Y-%m-%d %H:%M:%S")
     tem_id_lote: bool = "ID Lote" in df.columns
     ignorados_sem_trans: int = 0
 
     for _, r in df.iterrows():
+        is_combo = bool(r.get("is_combo", False))
         id_sub = str(r.get("subscription_id", "")).strip()
-        id_trans = str(r.get("transaction_id", "")).strip() if "transaction_id" in df.columns else ""
+        id_trans = str(r.get("transaction_id", "")).strip()
+        sku = str(r.get("sku", "")).strip()
 
         if id_sub:
             registros_assinaturas.append(
@@ -5293,15 +5631,27 @@ def registrar_envios(
                     "registro_em": registro_em,
                 }
             )
-        elif id_trans:
-            rec: dict[str, Any] = {"transaction_id": id_trans, "registro_em": registro_em}
+        elif is_combo and id_trans and sku:
+            # → COMBOS: granular por item (usa chave_dedup para dedup no Excel)
+            rec: dict[str, Any] = {
+                "chave_dedup": f"{id_trans}+{sku}",
+                "transaction_id": id_trans,
+                "sku": sku,
+                "registro_em": registro_em,
+            }
+            if tem_id_lote:
+                rec["id_lote"] = str(r.get("ID Lote", "")).strip()
+            registros_combos.append(rec)
+        elif (not is_combo) and id_trans:
+            # → PRODUTOS (legacy)
+            rec = {"transaction_id": id_trans, "registro_em": registro_em}
             if tem_id_lote:
                 rec["id_lote"] = str(r.get("ID Lote", "")).strip()
             registros_produtos.append(rec)
         else:
             ignorados_sem_trans += 1
 
-    if not registros_assinaturas and not registros_produtos:
+    if not (registros_assinaturas or registros_produtos or registros_combos):
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhum registro válido encontrado para salvar.")
         return
 
@@ -5312,15 +5662,19 @@ def registrar_envios(
         verificar_duplicidade_no_log(caminho_excel, registros_assinaturas, sheet_name="assinaturas")
     if registros_produtos:
         verificar_duplicidade_no_log(caminho_excel, registros_produtos, sheet_name="produtos")
+    if registros_combos:
+        verificar_duplicidade_no_log(caminho_excel, registros_combos, sheet_name="combos")
 
-    total = len(registros_assinaturas) + len(registros_produtos)
+    total = len(registros_assinaturas) + len(registros_produtos) + len(registros_combos)
     msg = f"{total} registro(s) foram adicionados ao log."
     if registros_assinaturas:
         msg += f"\n  . Assinaturas: {len(registros_assinaturas)}"
     if registros_produtos:
         msg += f"\n  . Produtos: {len(registros_produtos)}"
+    if registros_combos:
+        msg += f"\n  . Combos (itens): {len(registros_combos)}"
     if ignorados_sem_trans:
-        msg += f"\n  . Ignorados (produtos sem transaction_id): {ignorados_sem_trans}"
+        msg += f"\n  . Ignorados (sem transaction_id): {ignorados_sem_trans}"
     comunicador_global.mostrar_mensagem.emit("info", "Registro concluído", msg)
 
 
@@ -5351,14 +5705,21 @@ def iniciar_registro_envios() -> None:
     bimestre: int = 1 + (mes - 1) // 2
     dff: pd.DataFrame = df.copy()
 
-    # ✅ Garantias básicas
-    for col in ("indisponivel", "periodicidade", "subscription_id", "origem"):
+    # helper para booleanos textuais
+    def _to_bool(v: Any) -> bool:
+        s = str(v).strip().lower()
+        return s in {"true", "1", "s", "sim", "t", "y", "yes"}
+
+    # ✅ Garantias básicas (inclui is_combo)
+    for col in ("indisponivel", "periodicidade", "subscription_id", "origem", "is_combo"):
         if col not in dff.columns:
             dff[col] = ""
+
     dff["indisponivel"] = dff["indisponivel"].astype(str)
     dff["periodicidade"] = dff["periodicidade"].astype(str).str.lower().replace({"nan": ""})
     dff["subscription_id"] = dff["subscription_id"].astype(str).str.strip()
     dff["origem"] = dff["origem"].astype(str).str.lower().str.strip()
+    dff["is_combo"] = dff["is_combo"].map(_to_bool)
 
     # 🚫 Remover indisponíveis
     mask_validos = ~dff["indisponivel"].str.upper().eq("S")
@@ -5370,7 +5731,7 @@ def iniciar_registro_envios() -> None:
     # 🔹 Assinaturas
     df_mensal = dff[dff["periodicidade"].eq("mensal")].copy()
     df_bimestral = dff[dff["periodicidade"].eq("bimestral")].copy()
-    # 🔹 Produtos
+    # 🔹 Produtos (inclui combos e produtos avulsos)
     mask_prod = dff["subscription_id"].eq("") | dff["origem"].eq("produtos")
     df_produtos = dff[mask_prod].copy()
 
@@ -5394,16 +5755,15 @@ def iniciar_registro_envios() -> None:
 def verificar_duplicidade_no_log(
     caminho: str | PathLike[str],
     novos: Sequence[Mapping[str, Any]] | pd.DataFrame,
-    sheet_name: Literal["produtos", "assinaturas"],
+    sheet_name: Literal["produtos", "assinaturas", "combos"],
 ) -> int:
     """Salva/atualiza uma planilha Excel garantindo que não haja duplicados na aba indicada. Retorna
     a quantidade de registros efetivamente adicionados.
 
     - caminho: caminho do arquivo .xlsx
     - novos: sequência de registros (dict-like) ou um DataFrame já pronto
-    - sheet_name: "produtos" | "assinaturas"
+    - sheet_name: "produtos" | "assinaturas" | "combos"
     """
-    # normaliza caminho para str (compatível com os.path / pandas)
     caminho_str = os.fspath(caminho)
 
     # normaliza entrada para DataFrame
@@ -5412,11 +5772,29 @@ def verificar_duplicidade_no_log(
     else:
         novos_df = pd.DataFrame(list(novos))
 
-    # chave de deduplicação por aba
+    # garante colunas mínimas por aba e chave de dedup
     if sheet_name == "produtos":
+        if "transaction_id" not in novos_df.columns:
+            novos_df["transaction_id"] = ""
         chave_unica: list[str] = ["transaction_id"]
+
     elif sheet_name == "assinaturas":
+        for col in ("subscription_id", "ano", "periodicidade", "periodo"):
+            if col not in novos_df.columns:
+                novos_df[col] = "" if col in ("subscription_id", "periodicidade") else -1
         chave_unica = ["subscription_id", "ano", "periodicidade", "periodo"]
+
+    elif sheet_name == "combos":
+        # precisa de transaction_id + sku; chave_dedup = "transaction_id+sku"
+        for col in ("transaction_id", "sku"):
+            if col not in novos_df.columns:
+                novos_df[col] = ""
+        if "chave_dedup" not in novos_df.columns:
+            novos_df["chave_dedup"] = (
+                novos_df["transaction_id"].astype(str).str.strip() + "+" + novos_df["sku"].astype(str).str.strip()
+            )
+        chave_unica = ["chave_dedup"]
+
     else:
         raise ValueError(f"Aba desconhecida: {sheet_name!r}")
 
@@ -5425,9 +5803,7 @@ def verificar_duplicidade_no_log(
 
     if escritor_existente:
         try:
-            # carrega todas as abas existentes
             lidas = pd.read_excel(caminho_str, sheet_name=None)
-            # mypy: garantimos o tipo de volta
             todas_abas = dict(lidas) if isinstance(lidas, dict) else {}
             existentes: pd.DataFrame = todas_abas.get(sheet_name, pd.DataFrame())
             tamanho_antes = len(existentes)
@@ -7032,6 +7408,7 @@ class ColetarPedidosShopify(QRunnable):
         - Se não for combo: [{'sku', 'quantity', 'line_item_id'}]
         - Se combo indisponível e mapeado: [{'sku', 'quantity', 'line_item_id', 'combo_indisponivel': True}]
         - Se combo normal: componentes multiplicados, todos com o MESMO 'line_item_id' do line item original.
+        (Agora anotando unit_price_hint: 0.0 p/ brinde; {"_combo_divisor": N} p/ não-brinde)
         """
         itens_expandidos: list[dict[str, Any]] = []
         li_edges = cast(list[dict[str, Any]], (pedido.get("lineItems") or {}).get("edges", []) or [])
@@ -7048,8 +7425,11 @@ class ColetarPedidosShopify(QRunnable):
                 continue
 
             info = self._buscar_info_por_sku(skus_info, sku_li)
+            tipo_info = str((info or {}).get("tipo", "")).strip().lower()
+
             # não é combo
-            if not info or not info.get("composto_de"):
+            eh_combo = bool(info) and (tipo_info == "combo" or info.get("composto_de"))
+            if not eh_combo:
                 itens_expandidos.append(
                     {
                         "sku": sku_li,
@@ -7078,7 +7458,7 @@ class ColetarPedidosShopify(QRunnable):
             # desmembrar componentes → TODOS herdam o mesmo line_item_id
             raw_comp = info.get("composto_de") or []
 
-            # Normaliza para lista de componentes
+            # Normaliza para lista de componentes "por combo" (sem multiplicar por qty_li ainda)
             if isinstance(raw_comp, str):
                 # permite "SKU1, SKU2 x 2; SKU3*3"
                 comp_list_any: list[Any] = [s.strip() for s in re.split(r"[;,]", raw_comp) if s.strip()]
@@ -7087,8 +7467,7 @@ class ColetarPedidosShopify(QRunnable):
             else:
                 comp_list_any = []
 
-            add_any = False
-
+            comp_norm: list[tuple[str, int]] = []
             for comp in comp_list_any:
                 comp_sku = ""
                 comp_qty = 1
@@ -7113,18 +7492,9 @@ class ColetarPedidosShopify(QRunnable):
                     continue
 
                 if comp_sku:
-                    itens_expandidos.append(
-                        {
-                            "sku": comp_sku,
-                            "quantity": comp_qty * qty_li,
-                            "from_combo": sku_li,
-                            "is_combo_component": True,
-                            "line_item_id": line_item_id,  # ✅ mesmo id p/ todas as linhas do combo
-                        }
-                    )
-                    add_any = True
+                    comp_norm.append((comp_sku, max(1, comp_qty)))
 
-            if not add_any:
+            if not comp_norm:
                 # fallback: sem componentes válidos, mantém o combo “inteiro”
                 itens_expandidos.append(
                     {
@@ -7135,6 +7505,75 @@ class ColetarPedidosShopify(QRunnable):
                         "line_item_id": line_item_id,  # ✅ mantém id
                     }
                 )
+                continue
+
+            # === NOVO: calcular divisor efetivo do combo e anotar unit_price_hint por componente ===
+            try:
+                # aceita divisor como int ou string numérica; válido se >= 1
+                cfg_div_raw = info.get("divisor", None)
+                cfg_div: int | None
+                if isinstance(cfg_div_raw, int):
+                    cfg_div = cfg_div_raw if cfg_div_raw >= 1 else None
+                elif isinstance(cfg_div_raw, str) and cfg_div_raw.strip().isdigit():
+                    cfg_div = int(cfg_div_raw.strip())
+                    if cfg_div < 1:
+                        cfg_div = None
+                else:
+                    cfg_div = None
+
+                def _is_brinde(sku_: str) -> bool:
+                    _inf = self._buscar_info_por_sku(skus_info, sku_) or {}
+                    return str(_inf.get("tipo", "")).strip().lower() == "brinde"
+
+                total_nao_brinde = sum(q for (s, q) in comp_norm if not _is_brinde(s))
+                if cfg_div is not None:
+                    divisor_efetivo = cfg_div
+                else:
+                    divisor_efetivo = max(1, total_nao_brinde)
+
+                # adiciona os componentes multiplicando pela quantidade do line item (qty_li),
+                # marcando a dica de preço por item:
+                somente_brindes = True
+                for comp_sku, comp_qty in comp_norm:
+                    quantidade_total = comp_qty * qty_li
+                    if quantidade_total <= 0:
+                        continue
+
+                    if _is_brinde(comp_sku):
+                        unit_price_hint: Any = 0.0
+                    else:
+                        unit_price_hint = {"_combo_divisor": divisor_efetivo}
+                        somente_brindes = False
+
+                    itens_expandidos.append(
+                        {
+                            "sku": comp_sku,
+                            "quantity": quantidade_total,
+                            "from_combo": sku_li,
+                            "is_combo": True,
+                            "line_item_id": line_item_id,  # ✅ mesmo id p/ todas as linhas do combo
+                            "unit_price_hint": unit_price_hint,  # ← usado depois no cálculo de preço
+                        }
+                    )
+
+                # se por acaso todos forem brindes, já garantimos unit_price_hint=0.0 em todos
+                # (nada extra a fazer; este bloco só indica explicitamente a intenção)
+                _ = somente_brindes  # no-op; mantido para clareza
+            except Exception:
+                # se algo falhar, mantém o comportamento anterior (sem hints)
+                for comp_sku, comp_qty in comp_norm:
+                    quantidade_total = comp_qty * qty_li
+                    if quantidade_total <= 0:
+                        continue
+                    itens_expandidos.append(
+                        {
+                            "sku": comp_sku,
+                            "quantity": quantidade_total,
+                            "from_combo": sku_li,
+                            "is_combo": True,
+                            "line_item_id": line_item_id,  # ✅ mesmo id p/ todas as linhas do combo
+                        }
+                    )
 
         return itens_expandidos
 
@@ -8001,7 +8440,6 @@ def montar_planilha_shopify(
                 linha: dict[str, Any] = {
                     "Número pedido": pedido.get("name", ""),
                     "Nome Comprador": nome_cliente,
-                    "Data Pedido": (pedido.get("createdAt") or "")[:10],
                     "Data": local_now().strftime("%d/%m/%Y"),
                     "CPF/CNPJ Comprador": "",
                     "Endereço Comprador": endereco.get("address1", ""),
@@ -8046,6 +8484,7 @@ def montar_planilha_shopify(
                     "id_produto": product_id,
                     "indisponivel": indisponivel_flag,
                     "Precisa Contato": "SIM",
+                    "Data Pedido": (pedido.get("createdAt") or "")[:10],
                 }
                 linhas_geradas.append(linha)
 
@@ -9339,13 +9778,14 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
     skus_info: MutableMapping[str, Any] = cast(MutableMapping[str, Any], estado["skus_info"])
     dialog: QDialog = QDialog()
     dialog.setWindowTitle("Editor de SKUs")
-    dialog.setGeometry(100, 100, 1000, 600)
+    dialog.setGeometry(100, 100, 1100, 650)
     layout: QVBoxLayout = QVBoxLayout(dialog)
 
     tabs: QTabWidget = QTabWidget()
     tab_produtos: QWidget = QWidget()
     tab_assinaturas: QWidget = QWidget()
     tab_combos: QWidget = QWidget()
+    tab_brindes: QWidget = QWidget()  # ← NOVO
 
     # 📦 Produtos
     tabela_prod: QTableWidget = QTableWidget()
@@ -9363,12 +9803,17 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
 
     # 📚 Combos
     tabela_combo: QTableWidget = QTableWidget()
-    tabela_combo.setColumnCount(7)
+    tabela_combo.setColumnCount(8)  # + "Divisor"
     tabela_combo.setHorizontalHeaderLabels(
-        ["Nome", "SKU", "Composto de", "Guru IDs", "Shopify IDs", "Preço Fallback", "Indisp."]
+        ["Nome", "SKU", "Composto de", "Guru IDs", "Shopify IDs", "Preço Fallback", "Divisor", "Indisp."]
     )
 
-    for tabela in [tabela_prod, tabela_assin, tabela_combo]:
+    # 🎁 Brindes (simples: Nome, SKU, Observações, Guru IDs, Shopify IDs, Indisp.)
+    tabela_brinde: QTableWidget = QTableWidget()
+    tabela_brinde.setColumnCount(6)
+    tabela_brinde.setHorizontalHeaderLabels(["Nome", "SKU", "Observações", "Guru IDs", "Shopify IDs", "Indisp."])
+
+    for tabela in [tabela_prod, tabela_assin, tabela_combo, tabela_brinde]:
         header = tabela.horizontalHeader()
         if header is not None:
             header.setSectionResizeMode(QHeaderView.Stretch)
@@ -9379,6 +9824,8 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
     layout_assin.addWidget(tabela_assin)
     layout_combo: QVBoxLayout = QVBoxLayout(tab_combos)
     layout_combo.addWidget(tabela_combo)
+    layout_brinde: QVBoxLayout = QVBoxLayout(tab_brindes)
+    layout_brinde.addWidget(tabela_brinde)
 
     def _mk_checkbox(checked: bool = False) -> QCheckBox:
         cb: QCheckBox = QCheckBox()
@@ -9390,28 +9837,69 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
         w = table.cellWidget(row, col)
         return bool(w.isChecked()) if isinstance(w, QCheckBox) else False
 
+    # util: formatar composto_de para exibição (combos)
+    def _fmt_composto(raw: Any) -> str:
+        if isinstance(raw, str):
+            parts: list[Any] = [s.strip() for s in re.split(r"[;,]", raw) if s.strip()]
+        elif isinstance(raw, list):
+            parts = raw
+        else:
+            parts = []
+        out: list[str] = []
+        for c in parts:
+            if isinstance(c, str):
+                out.append(c.strip())
+            elif isinstance(c, dict):
+                sku_c = str(c.get("sku") or c.get("SKU") or "").strip()
+                try:
+                    q = int(c.get("qtd") or c.get("quantity") or 1)
+                except Exception:
+                    q = 1
+                out.append(f"{sku_c} x {q}" if q != 1 else sku_c)
+        return ", ".join([s for s in out if s])
+
+    # util: parse da string da coluna "Composto de" para lista normalizada (combos)
+    def _parse_composto_to_list(composto_str: str) -> list[dict[str, Any] | str]:
+        itens: list[dict[str, Any] | str] = []
+        tokens = [s.strip() for s in re.split(r"[;,]", composto_str) if s.strip()]
+        for tok in tokens:
+            m = re.match(r"^\s*([A-Za-z0-9._\-]+)\s*(?:[xX\*]\s*(\d+))?\s*$", tok)
+            if m:
+                sku = m.group(1).strip()
+                qtd = int(m.group(2)) if m.group(2) else 1
+                itens.append({"sku": sku, "qtd": max(1, qtd)})
+            else:
+                itens.append(tok)  # fallback
+        return itens
+
     # Funções para adicionar nova linha
     def adicionar_produto() -> None:
         row: int = tabela_prod.rowCount()
         tabela_prod.insertRow(row)
         for col in range(6):
             tabela_prod.setItem(row, col, QTableWidgetItem(""))
-        # coluna 6 = Indisp. (checkbox)
-        tabela_prod.setCellWidget(row, 6, _mk_checkbox(False))
+        tabela_prod.setCellWidget(row, 6, _mk_checkbox(False))  # Indisp.
 
     def adicionar_assinatura() -> None:
         row: int = tabela_assin.rowCount()
         tabela_assin.insertRow(row)
-        for col in range(5):  # até Preço Fallback
+        for col in range(5):
             tabela_assin.setItem(row, col, QTableWidgetItem(""))
         tabela_assin.setCellWidget(row, 5, _mk_checkbox(False))  # Indisp.
 
     def adicionar_combo() -> None:
         row: int = tabela_combo.rowCount()
         tabela_combo.insertRow(row)
-        for col in range(6):
+        for col in range(7):  # inclui "Divisor" na posição 6
             tabela_combo.setItem(row, col, QTableWidgetItem(""))
-        tabela_combo.setCellWidget(row, 6, _mk_checkbox(False))  # Indisp.
+        tabela_combo.setCellWidget(row, 7, _mk_checkbox(False))  # Indisp.
+
+    def adicionar_brinde() -> None:
+        row: int = tabela_brinde.rowCount()
+        tabela_brinde.insertRow(row)
+        for col in range(5):  # até Shopify IDs
+            tabela_brinde.setItem(row, col, QTableWidgetItem(""))
+        tabela_brinde.setCellWidget(row, 5, _mk_checkbox(False))  # Indisp.
 
     # 🧹 Funções para remover linha selecionada
     def remover_produto() -> None:
@@ -9428,6 +9916,11 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
         row: int = tabela_combo.currentRow()
         if row >= 0:
             tabela_combo.removeRow(row)
+
+    def remover_brinde() -> None:
+        row: int = tabela_brinde.currentRow()
+        if row >= 0:
+            tabela_brinde.removeRow(row)
 
     # 📦 Botões Produtos
     layout_botoes_prod: QHBoxLayout = QHBoxLayout()
@@ -9459,9 +9952,20 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
     layout_botoes_combo.addWidget(btn_remover_combo)
     layout_combo.addLayout(layout_botoes_combo)
 
+    # 🎁 Botões Brindes
+    layout_botoes_brinde: QHBoxLayout = QHBoxLayout()
+    btn_novo_brinde: QPushButton = QPushButton("+ Novo Brinde")
+    btn_novo_brinde.clicked.connect(adicionar_brinde)
+    btn_remover_brinde: QPushButton = QPushButton("🗑️ Remover Selecionado")
+    btn_remover_brinde.clicked.connect(remover_brinde)
+    layout_botoes_brinde.addWidget(btn_novo_brinde)
+    layout_botoes_brinde.addWidget(btn_remover_brinde)
+    layout_brinde.addLayout(layout_botoes_brinde)
+
     tabs.addTab(tab_produtos, "📦 Produtos")
     tabs.addTab(tab_assinaturas, "📬 Assinaturas")
     tabs.addTab(tab_combos, "📚 Combos")
+    tabs.addTab(tab_brindes, "🎁 Brindes")  # ← NOVO
     layout.addWidget(tabs)
 
     def carregar_skus() -> dict[str, Any]:
@@ -9474,10 +9978,13 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
         tabela_prod.setRowCount(0)
         tabela_assin.setRowCount(0)
         tabela_combo.setRowCount(0)
+        tabela_brinde.setRowCount(0)
 
         for nome, info in skus_dict.items():
+            tipo = str(info.get("tipo", "")).lower()
+
             # ASSINATURAS
-            if info.get("tipo") == "assinatura":
+            if tipo == "assinatura":
                 row = tabela_assin.rowCount()
                 tabela_assin.insertRow(row)
 
@@ -9485,27 +9992,63 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
                 periodicidade: str = info.get("periodicidade") or (nome.split(" - ")[1] if " - " in nome else "")
 
                 tabela_assin.setItem(row, 0, QTableWidgetItem(nome_base))
-                tabela_assin.setItem(
-                    row,
-                    1,
-                    QTableWidgetItem(info.get("recorrencia", "") or info.get("recorrencia", "")),
-                )
+                tabela_assin.setItem(row, 1, QTableWidgetItem(info.get("recorrencia", "")))
                 tabela_assin.setItem(row, 2, QTableWidgetItem(periodicidade))
                 tabela_assin.setItem(row, 3, QTableWidgetItem(", ".join(info.get("guru_ids", []))))
                 tabela_assin.setItem(row, 4, QTableWidgetItem(str(info.get("preco_fallback", ""))))
-                # indisponivel
                 tabela_assin.setCellWidget(row, 5, _mk_checkbox(bool(info.get("indisponivel", False))))
+
             # COMBOS
-            elif info.get("tipo") == "combo":
+            elif tipo == "combo":
                 row = tabela_combo.rowCount()
                 tabela_combo.insertRow(row)
+
+                comp_str = _fmt_composto(info.get("composto_de") or [])
+                guru_ids = info.get("guru_ids") or []
+                if not isinstance(guru_ids, list):
+                    guru_ids = [guru_ids]
+                guru_str = ", ".join(str(x) for x in guru_ids if x is not None)
+
+                shopify_ids = info.get("shopify_ids") or []
+                if not isinstance(shopify_ids, list):
+                    shopify_ids = [shopify_ids]
+                shopify_str = ", ".join(str(x) for x in shopify_ids if x is not None)
+
+                divisor_val = info.get("divisor", "")
+                divisor_str = "" if divisor_val in (None, "") else str(divisor_val)
+
                 tabela_combo.setItem(row, 0, QTableWidgetItem(nome))
                 tabela_combo.setItem(row, 1, QTableWidgetItem(info.get("sku", "")))
-                tabela_combo.setItem(row, 2, QTableWidgetItem(", ".join(info.get("composto_de", []))))
-                tabela_combo.setItem(row, 3, QTableWidgetItem(", ".join(info.get("guru_ids", []))))
-                tabela_combo.setItem(row, 4, QTableWidgetItem(", ".join(str(i) for i in info.get("shopify_ids", []))))
+                tabela_combo.setItem(row, 2, QTableWidgetItem(comp_str))
+                tabela_combo.setItem(row, 3, QTableWidgetItem(guru_str))
+                tabela_combo.setItem(row, 4, QTableWidgetItem(shopify_str))
                 tabela_combo.setItem(row, 5, QTableWidgetItem(str(info.get("preco_fallback", ""))))
-                tabela_combo.setCellWidget(row, 6, _mk_checkbox(bool(info.get("indisponivel", False))))
+                tabela_combo.setItem(row, 6, QTableWidgetItem(divisor_str))
+                tabela_combo.setCellWidget(row, 7, _mk_checkbox(bool(info.get("indisponivel", False))))
+
+            # BRINDES
+            elif tipo == "brinde":
+                row = tabela_brinde.rowCount()
+                tabela_brinde.insertRow(row)
+
+                obs = str(info.get("obs", ""))  # campo livre opcional
+                guru_ids = info.get("guru_ids") or []
+                if not isinstance(guru_ids, list):
+                    guru_ids = [guru_ids]
+                guru_str = ", ".join(str(x) for x in guru_ids if x is not None)
+
+                shopify_ids = info.get("shopify_ids") or []
+                if not isinstance(shopify_ids, list):
+                    shopify_ids = [shopify_ids]
+                shopify_str = ", ".join(str(x) for x in shopify_ids if x is not None)
+
+                tabela_brinde.setItem(row, 0, QTableWidgetItem(nome))
+                tabela_brinde.setItem(row, 1, QTableWidgetItem(info.get("sku", "")))
+                tabela_brinde.setItem(row, 2, QTableWidgetItem(obs))
+                tabela_brinde.setItem(row, 3, QTableWidgetItem(guru_str))
+                tabela_brinde.setItem(row, 4, QTableWidgetItem(shopify_str))
+                tabela_brinde.setCellWidget(row, 5, _mk_checkbox(bool(info.get("indisponivel", False))))
+
             # PRODUTOS
             else:
                 row = tabela_prod.rowCount()
@@ -9520,6 +10063,7 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
 
     def salvar_tabelas() -> None:
         skus: dict[str, Any] = {}
+
         # --- PRODUTOS ---
         for row in range(tabela_prod.rowCount()):
 
@@ -9594,8 +10138,8 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
                 item = tabela_combo.item(_row, col)
                 return item.text().strip() if item else ""
 
-            # Agora lendo 6 colunas para capturar preco_str também
-            nome, sku, composto, guru, shopify, preco_str = map(get, range(6))
+            # Agora lendo 7 colunas de texto (0..6) para capturar também o divisor
+            nome, sku, composto, guru, shopify, preco_str, divisor_str = map(get, range(7))
             if not nome:
                 continue
 
@@ -9604,17 +10148,49 @@ def abrir_editor_produtos(box_nome_input: QComboBox | None = None) -> None:
             except (ValueError, TypeError):
                 preco_c = None
 
+            # divisor opcional (>=1), se inválido → ignorado (fallback p/ contagem de não-brindes)
+            try:
+                divisor: int | None = int(divisor_str) if divisor_str else None
+                if divisor is not None and divisor < 1:
+                    divisor = None
+            except (ValueError, TypeError):
+                divisor = None
+
             skus[nome] = {
                 "sku": sku,
                 "peso": 0.0,
                 "tipo": "combo",
-                "composto_de": [x.strip() for x in composto.split(",") if x.strip()],
+                "composto_de": _parse_composto_to_list(composto),
                 "guru_ids": [x.strip() for x in guru.split(",") if x.strip()],
                 "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
-                "indisponivel": _get_checkbox(tabela_combo, row, 6),
+                "indisponivel": _get_checkbox(tabela_combo, row, 7),
             }
             if preco_c is not None:
                 skus[nome]["preco_fallback"] = preco_c
+            if divisor is not None:
+                skus[nome]["divisor"] = divisor  # <— NOVO
+
+        # --- BRINDES ---
+        for row in range(tabela_brinde.rowCount()):
+
+            def get(col: int, _row: int = row) -> str:
+                item = tabela_brinde.item(_row, col)
+                return item.text().strip() if item else ""
+
+            nome, sku, obs, guru, shopify = map(get, range(5))
+            if not nome:
+                continue
+
+            skus[nome] = {
+                "tipo": "brinde",
+                "sku": sku,
+                "obs": obs,  # campo livre opcional
+                "peso": 0.0,  # normalmente irrelevante p/ brinde
+                "guru_ids": [x.strip() for x in guru.split(",") if x.strip()],
+                "shopify_ids": [int(x.strip()) for x in shopify.split(",") if x.strip().isdigit()],
+                "composto_de": [],
+                "indisponivel": _get_checkbox(tabela_brinde, row, 5),
+            }
 
         with open(skus_path, "w", encoding="utf-8") as f:
             json.dump(skus, f, indent=4, ensure_ascii=False)
@@ -9866,6 +10442,20 @@ def criar_grupo_guru(
     linha_botoes.addWidget(btn_importar)
     layout.addLayout(linha_botoes)
 
+    # 🔗 Conexões
+    btn_buscar_assinaturas.clicked.connect(
+        lambda: iniciar_busca_assinaturas(
+            ano_spin.value(),
+            int(combo_mes.currentText()),
+            combo_filtro.currentText(),  # "PERÍODO" ou "TODAS"
+            box_nome_input,
+            transportadoras_var,
+            estado,
+            skus_info,
+            periodicidade_selecionada=combo_periodicidade.currentText().strip().lower(),
+        )
+    )
+
     btn_importar.clicked.connect(importar_planilha_pedidos_guru)
 
     # 🔁 Ações de visualização que permanecem aqui
@@ -9899,25 +10489,19 @@ def criar_grupo_guru(
     btn_reload_rules.clicked.connect(recarregar_regras_assinaturas)
     linha_config.addWidget(btn_reload_rules)
 
+    skus_path = Path(os.path.join(os.path.dirname(__file__), "skus.json"))
+
+    btn_mapear_guru = QPushButton("🔗 Mapear produtos do Guru")
+    btn_mapear_guru.clicked.connect(
+        lambda: iniciar_mapeamento_produtos_guru(skus_info, coletar_produtos_guru(), skus_path)
+    )
+    linha_config.addWidget(btn_mapear_guru)
+
     btn_editar = QPushButton("✏️ Editar Produtos")
     btn_editar.clicked.connect(lambda: abrir_editor_produtos(None))
     linha_config.addWidget(btn_editar)
 
     layout.addLayout(linha_config)
-
-    # 🔗 Conexões
-    btn_buscar_assinaturas.clicked.connect(
-        lambda: iniciar_busca_assinaturas(
-            ano_spin.value(),
-            int(combo_mes.currentText()),
-            combo_filtro.currentText(),  # "PERÍODO" ou "TODAS"
-            box_nome_input,
-            transportadoras_var,
-            estado,
-            skus_info,
-            periodicidade_selecionada=combo_periodicidade.currentText().strip().lower(),
-        )
-    )
 
     btn_buscar_produtos.clicked.connect(
         lambda: iniciar_coleta_vendas_produtos(box_nome_input, transportadoras_var, skus_info, estado)
@@ -10107,41 +10691,6 @@ def criar_grupo_controle(estado: MutableMapping[str, Any]) -> QGroupBox:
 
     outer_layout.addWidget(inner_widget)
     return group
-
-
-def criar_tab_config(
-    estado: MutableMapping[str, Any],
-    skus_info: Mapping[str, MutableMapping[str, Any]],
-) -> QWidget:
-    tab = QWidget()
-    layout = QVBoxLayout(tab)
-
-    grupo = QGroupBox("⚙️ Configurações")
-    layout_config = QVBoxLayout(grupo)
-
-    # 🔗 Botões de mapeamento
-
-    linha_mapeamento = QHBoxLayout()
-    btn_mapear_shopify = QPushButton("🔗 Mapear produtos da loja")
-    btn_mapear_shopify.clicked.connect(lambda: iniciar_mapeamento_produtos_shopify(skus_info))
-    linha_mapeamento.addWidget(btn_mapear_shopify)
-
-    btn_mapear_guru = QPushButton("🔗 Mapear produtos do Guru")
-    btn_mapear_guru.clicked.connect(
-        lambda: iniciar_mapeamento_produtos_guru(skus_info, coletar_produtos_guru(), skus_path)
-    )
-    linha_mapeamento.addWidget(btn_mapear_guru)
-
-    layout_config.addLayout(linha_mapeamento)
-
-    btn_regras = QPushButton("⚖️ Gerenciar Regras de Ofertas")
-    btn_regras.clicked.connect(lambda: iniciar_gerenciador_regras(estado, skus_info))
-    layout_config.addWidget(btn_regras)
-
-    # As regras agora vivem no config_ofertas.json e são editadas/salvas pelo próprio diálogo de regras.
-
-    layout.addWidget(grupo)
-    return tab
 
 
 def abrir_interface(

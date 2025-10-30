@@ -15,7 +15,7 @@
         ],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": false,
+        "indisponivel": true,
         "preco_fallback": 150.0
     },
     "O Príncipe": {
@@ -97,7 +97,7 @@
         ],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": false,
+        "indisponivel": true,
         "preco_fallback": 81.9
     },
     "David Hume": {
@@ -194,7 +194,7 @@
         "composto_de": [],
         "indisponivel": false
     },
-    "Aristóteles - Categorias 01": {
+    "Aristóteles - 01 - Categorias": {
         "sku": "L008A",
         "peso": 0.65,
         "guru_ids": [
@@ -205,6 +205,37 @@
             8581966594238,
             8581972689086
         ],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false
+    },
+    "Descartes": {
+        "sku": "B007A",
+        "peso": 0.568,
+        "guru_ids": [],
+        "shopify_ids": [],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": false
+    },
+    "Vida dos Grandes Filósofos": {
+        "sku": "L010A",
+        "peso": 0.498,
+        "guru_ids": [
+            "a01ab6a3-416b-448c-b5d0-d6f8f5970c6d"
+        ],
+        "shopify_ids": [],
+        "tipo": "produto",
+        "composto_de": [],
+        "indisponivel": true
+    },
+    "Filosofia do Dinheiro": {
+        "sku": "L009A",
+        "peso": 0.498,
+        "guru_ids": [
+            "a006f082-063b-4255-b0e3-53f048645105"
+        ],
+        "shopify_ids": [],
         "tipo": "produto",
         "composto_de": [],
         "indisponivel": true
@@ -321,11 +352,55 @@
         "peso": 0.0,
         "indisponivel": false
     },
+    "Assinatura 18 Meses - mensal": {
+        "tipo": "assinatura",
+        "recorrencia": "18meses",
+        "periodicidade": "mensal",
+        "guru_ids": [
+            "a01d8454-ec2b-478a-ac08-46dec3b915f8",
+            "a01d8517-ec73-4472-b299-f7cc0fd8f0d0"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
+    "Assinatura Semestral - mensal": {
+        "tipo": "assinatura",
+        "recorrencia": "semestral",
+        "periodicidade": "mensal",
+        "guru_ids": [
+            "a0044351-60e6-4fe1-9613-e36980c7ad69"
+        ],
+        "shopify_ids": [],
+        "composto_de": [],
+        "sku": "",
+        "peso": 0.0,
+        "indisponivel": false
+    },
     "Aristóteles - Obras Completas": {
         "sku": "C003A",
         "peso": 0.0,
         "tipo": "combo",
-        "composto_de": [],
+        "composto_de": [
+            {
+                "sku": "L008A",
+                "qtd": 1
+            },
+            {
+                "sku": "008A1",
+                "qtd": 1
+            },
+            {
+                "sku": "008A2",
+                "qtd": 1
+            },
+            {
+                "sku": "008A3",
+                "qtd": 1
+            }
+        ],
         "guru_ids": [
             "9fd647f8-9471-41e6-8a57-918973e84a17"
         ],
@@ -334,46 +409,81 @@
             8582088655038,
             8582093701310
         ],
-        "indisponivel": true
+        "indisponivel": false,
+        "divisor": 19
     },
     "Todas obras lançadas": {
         "sku": "C001A",
         "peso": 0.0,
         "tipo": "combo",
         "composto_de": [
-            "L002A",
-            "L001A",
-            "B001A",
-            "B002A",
-            "B003A"
+            {
+                "sku": "L002A",
+                "qtd": 1
+            },
+            {
+                "sku": "L001A",
+                "qtd": 1
+            },
+            {
+                "sku": "B001A",
+                "qtd": 1
+            },
+            {
+                "sku": "B002A",
+                "qtd": 1
+            },
+            {
+                "sku": "B003A",
+                "qtd": 1
+            }
         ],
         "guru_ids": [
             "9ef8fd8b-b1a0-4292-a9fe-ab7e6ade86e0"
         ],
         "shopify_ids": [],
-        "indisponivel": false
+        "indisponivel": false,
+        "divisor": 5
     },
     "Combo Boas-vindas": {
         "sku": "C002A",
         "peso": 0.0,
         "tipo": "combo",
         "composto_de": [
-            "L002A",
-            "B004A",
-            "L004A",
-            "B005A"
+            {
+                "sku": "L002A",
+                "qtd": 1
+            },
+            {
+                "sku": "B004A",
+                "qtd": 1
+            },
+            {
+                "sku": "L004A",
+                "qtd": 1
+            },
+            {
+                "sku": "B005A",
+                "qtd": 1
+            }
         ],
         "guru_ids": [
             "9fcc78ad-dbea-466a-80a1-eeba2205e4aa"
         ],
         "shopify_ids": [],
-        "indisponivel": false
+        "indisponivel": false,
+        "divisor": 4
     },
     "Aristóteles - 4 Volumes Órganon": {
         "sku": "C004A",
         "peso": 0.0,
         "tipo": "combo",
-        "composto_de": [],
+        "composto_de": [
+            {
+                "sku": "L008A",
+                "qtd": 1
+            }
+        ],
         "guru_ids": [
             "9fd522b3-c35f-4784-8e79-c5892a33a30c"
         ],
@@ -382,31 +492,37 @@
             8582032294078,
             8582034817214
         ],
-        "indisponivel": true
-    },
-    "Assinatura 18 Meses - mensal (mensal)": {
-        "tipo": "assinatura",
-        "recorrencia": "18meses",
-        "periodicidade": "mensal",
-        "sku": "ASS18M-MES",
-        "peso": 0.0,
         "indisponivel": false,
-        "composto_de": [],
-        "guru_ids": [
-            "a01d8454-ec2b-478a-ac08-46dec3b915f8",
-            "a01d8517-ec73-4472-b299-f7cc0fd8f0d0"
-        ]
+        "divisor": 4
     },
-    "Assinatura Semestral - mensal (mensal)": {
-        "tipo": "assinatura",
-        "recorrencia": "semestral",
-        "periodicidade": "mensal",
-        "sku": "ASS06M-MES",
+    "Aristóteles - Caderneta": {
+        "tipo": "brinde",
+        "sku": "008A3",
+        "obs": "",
         "peso": 0.0,
-        "indisponivel": false,
+        "guru_ids": [],
+        "shopify_ids": [],
         "composto_de": [],
-        "guru_ids": [
-            "a0044351-60e6-4fe1-9613-e36980c7ad69"
-        ]
+        "indisponivel": false
+    },
+    "Aristóteles - Xícara": {
+        "tipo": "brinde",
+        "sku": "008A2",
+        "obs": "",
+        "peso": 0.0,
+        "guru_ids": [],
+        "shopify_ids": [],
+        "composto_de": [],
+        "indisponivel": false
+    },
+    "Aristóteles - Pôster": {
+        "tipo": "brinde",
+        "sku": "008A1",
+        "obs": "",
+        "peso": 0.0,
+        "guru_ids": [],
+        "shopify_ids": [],
+        "composto_de": [],
+        "indisponivel": false
     }
 }
