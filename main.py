@@ -5425,43 +5425,58 @@ def remover_pedidos_enviados() -> None:
     df.columns = df.columns.str.strip()
     df.columns = df.columns.str.lower()
 
-    # aliases só na cópia de trabalho
+    # 🔒 elimina colunas duplicadas por nome normalizado (mantém a 1ª ocorrência)
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated(keep="first")]
+
+    # helper para coalescer colunas por "nome lógico" (após normalização)
+    def col_series(_df: pd.DataFrame, logical_name: str, default: Any = "") -> pd.Series:
+        cols = [c for c in _df.columns if c.strip().lower() == logical_name]
+        if not cols:
+            return pd.Series([default] * len(_df), index=_df.index)
+        if len(cols) == 1:
+            s = _df[cols[0]]
+        else:
+            # pega a 1ª não-nula na horizontal entre colunas duplicadas
+            s = _df[cols].bfill(axis=1).iloc[:, 0]
+        return s
+
+    # aliases só na cópia de trabalho (após deduplicar colunas)
     if "assinatura código" in df.columns and "subscription_id" not in df.columns:
         df["subscription_id"] = df["assinatura código"]
     if "id transação" in df.columns and "transaction_id" not in df.columns:
         df["transaction_id"] = df["id transação"]
 
-    # ✅ SKU (pode vir como 'SKU' na planilha original; após lower vira 'sku')
-    if "sku" not in df.columns:
-        df["sku"] = ""
-    df["sku"] = df["sku"].astype(str).fillna("").str.strip()
+    # ---------------------------
+    # Normalização de campos base
+    # ---------------------------
+    def _norm_tx(x: Any) -> str:
+        return str(x).strip()  # mantém hífens
 
-    # normalizações só na cópia de trabalho (evita Series|str)
-    if "subscription_id" not in df.columns:
-        df["subscription_id"] = ""
-    df["subscription_id"] = df["subscription_id"].astype(str).fillna("").str.strip()
+    def _norm_sku(x: Any) -> str:
+        return str(x).strip().upper()  # SKU maiúsculo
 
-    if "transaction_id" not in df.columns:
-        df["transaction_id"] = ""
-    df["transaction_id"] = df["transaction_id"].astype(str).fillna("").str.strip()
+    def _key_no_plus(tx: str, sku: str) -> str:
+        return f"{_norm_tx(tx)}{_norm_sku(sku)}"  # sem separador
 
-    if "periodicidade" not in df.columns:
-        df["periodicidade"] = ""
-    df["periodicidade"] = df["periodicidade"].astype(str).str.lower().replace({"nan": ""})
+    def _key_with_plus(tx: str, sku: str) -> str:
+        return f"{_norm_tx(tx)}+{_norm_sku(sku)}"  # com '+'
 
-    if "periodo" not in df.columns:
-        df["periodo"] = -1
-    df["periodo"] = pd.to_numeric(df["periodo"], errors="coerce").fillna(-1).astype(int)
+    # ✅ SKU / IDs
+    df["sku"] = col_series(df, "sku", "").astype(str).fillna("").map(_norm_sku)
+    df["subscription_id"] = col_series(df, "subscription_id", "").astype(str).fillna("").str.strip()
+    df["transaction_id"] = col_series(df, "transaction_id", "").astype(str).fillna("").map(_norm_tx)
+
+    # ✅ periodicidade / periodo
+    df["periodicidade"] = col_series(df, "periodicidade", "").astype(str).str.lower().str.strip().replace({"nan": ""})
+    df["periodo"] = pd.to_numeric(col_series(df, "periodo", -1), errors="coerce").fillna(-1).astype(int)
 
     # ✅ is_combo (normaliza para bool-like)
-    if "is_combo" not in df.columns:
-        df["is_combo"] = False
-
     def _to_bool(v: Any) -> bool:
         s = str(v).strip().lower()
         return s in {"true", "1", "s", "sim", "t", "y", "yes"}
 
-    df["is_combo"] = df["is_combo"].map(_to_bool)
+    df["is_combo"] = col_series(df, "is_combo", False).map(_to_bool).fillna(False)
 
     # seleção do período (passa QWidget, não None)
     ano_atual: int = QDate.currentDate().year()
@@ -5482,7 +5497,7 @@ def remover_pedidos_enviados() -> None:
     caminho_excel = os.path.join(os.path.dirname(__file__), "Envios", "envios_log.xlsx")
     assinaturas_existentes: set[tuple[str, int, str, int]] = set()
     produtos_existentes: set[str] = set()
-    combos_existentes: set[str] = set()  # chave_dedup (transaction_id+sku)
+    combos_existentes: set[str] = set()  # aceita chave com e sem '+'
 
     if os.path.exists(caminho_excel):
         try:
@@ -5506,36 +5521,54 @@ def remover_pedidos_enviados() -> None:
             }
 
             # ----- produtos (legacy por transaction_id inteiro) -----
-            if "transaction_id" not in produtos_df.columns:
-                produtos_df["transaction_id"] = ""
-            produtos_existentes = set(produtos_df["transaction_id"].astype(str).str.strip())
+            if "transaction_id" in produtos_df.columns:
+                produtos_existentes = {_norm_tx(v) for v in produtos_df["transaction_id"].astype(str).tolist()}
+            else:
+                produtos_existentes = set()
 
             # ----- combos (dedup por transaction_id + sku) -----
+            combos_existentes = set()
             if not combos_df.empty:
+                # 1) Se houver chave_dedup, aceita como veio e também sem '+'
                 if "chave_dedup" in combos_df.columns:
-                    combos_existentes = set(combos_df["chave_dedup"].astype(str).str.strip())
-                else:
-                    tx = combos_df.get("transaction_id", pd.Series(dtype=str)).astype(str).str.strip()
-                    sk = combos_df.get("sku", pd.Series(dtype=str)).astype(str).str.strip()
-                    combos_existentes = set((tx + "+" + sk).tolist())
+                    for raw in combos_df["chave_dedup"].astype(str):
+                        val = str(raw).strip()
+                        if not val:
+                            continue
+                        combos_existentes.add(val)
+                        combos_existentes.add(val.replace("+", ""))  # tolera variação
+                # 2) Se houver colunas separadas, monta as duas variantes
+                if {"transaction_id", "sku"}.issubset(combos_df.columns):
+                    for _, r in combos_df.iterrows():
+                        tx = _norm_tx(r.get("transaction_id", ""))
+                        sk = _norm_sku(r.get("sku", ""))
+                        if tx and sk:
+                            combos_existentes.add(_key_no_plus(tx, sk))
+                            combos_existentes.add(_key_with_plus(tx, sk))
 
         except Exception as e:
             print(f"[⚠️] Erro ao ler Excel: {e}")
 
     linhas_antes: int = len(df)
 
+    # ------------------------------------------------------------
+    # Decisão de remoção: roteia pela flag is_combo
+    # ------------------------------------------------------------
     def deve_remover(row: pd.Series) -> bool:
         id_sub = str(row.get("subscription_id", "")).strip()
-        id_trans = str(row.get("transaction_id", "")).strip()
-        sku_row = str(row.get("sku", "")).strip()
+        id_trans = _norm_tx(row.get("transaction_id", ""))
+        sku_row = _norm_sku(row.get("sku", ""))
         is_combo = bool(row.get("is_combo", False))
 
-        # 0) combos explícitos por flag
-        if is_combo and id_trans and sku_row:
-            chave = f"{id_trans}+{sku_row}"
-            return chave in combos_existentes
+        # 0) Combos: consultar SOMENTE a aba "combos"
+        if is_combo:
+            if id_trans and sku_row:
+                k1 = _key_no_plus(id_trans, sku_row)  # ex.: a037...L008A
+                k2 = _key_with_plus(id_trans, sku_row)  # ex.: a037...+L008A
+                return (k1 in combos_existentes) or (k2 in combos_existentes)
+            return False  # sem tx/sku não dá para deduplicar combo
 
-        # 1) assinaturas (por periodicidade/periodo/ano)
+        # 1) Assinaturas (por periodicidade/periodo/ano) — só se não for combo
         if id_sub:
             per = str(row.get("periodicidade", "")).strip().lower()
             if per == "mensal":
@@ -5544,15 +5577,10 @@ def remover_pedidos_enviados() -> None:
                 per_num = bimestre
             else:
                 return False
-            return (id_sub, int(ano), per, int(per_num)) in assinaturas_existentes
-
-        # 2) fallback histórico: combos deduzidos por trans+sku
-        if id_trans and sku_row:
-            chave = f"{id_trans}+{sku_row}"
-            if chave in combos_existentes:
+            if (id_sub, int(ano), per, int(per_num)) in assinaturas_existentes:
                 return True
 
-        # 3) produtos (legacy) por transaction_id inteiro
+        # 2) Produtos (legacy): consultar SOMENTE a aba "produtos" por transaction_id
         if id_trans:
             return id_trans in produtos_existentes
 
@@ -5585,7 +5613,7 @@ def registrar_envios(
 
     df = df.copy()
     # ✅ Garantias
-    for col in ("indisponivel", "subscription_id", "origem", "transaction_id", "sku", "is_combo"):
+    for col in ("indisponivel", "subscription_id", "origem", "transaction_id", "sku", "is_combo", "id_line_item"):
         if col not in df.columns:
             df[col] = ""
 
@@ -5593,16 +5621,17 @@ def registrar_envios(
     df["subscription_id"] = df["subscription_id"].astype(str).str.strip()
     df["origem"] = df["origem"].astype(str).str.lower().str.strip()
     df["transaction_id"] = df["transaction_id"].astype(str).str.strip()
+    df["id_line_item"] = df["id_line_item"].astype(str).str.strip()
     df["sku"] = df["sku"].astype(str).str.strip()
 
-    # normaliza is_combo → bool (aceita "S/sim/true/1")
+    # normaliza is_combo → bool
     def _to_bool(v: Any) -> bool:
         s = str(v).strip().lower()
-        return s in {"true", "1", "s", "sim", "t", "y", "yes"}
+        return s in {"true", "1", "s", "sim", "y", "yes"}
 
     df["is_combo"] = df["is_combo"].map(_to_bool) if "is_combo" in df.columns else False
 
-    # Remove indisponíveis
+    # Remove indisponíveis de cara
     df = df[~df["indisponivel"].str.upper().eq("S")].copy()
     if df.empty:
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhum registro válido após remover indisponíveis.")
@@ -5610,17 +5639,20 @@ def registrar_envios(
 
     registros_assinaturas: list[dict[str, Any]] = []
     registros_produtos: list[dict[str, Any]] = []
-    registros_combos: list[dict[str, Any]] = []  # ← combos
+    registros_combos: list[dict[str, Any]] = []
     registro_em: str = local_now().strftime("%Y-%m-%d %H:%M:%S")
     tem_id_lote: bool = "ID Lote" in df.columns
-    ignorados_sem_trans: int = 0
+    ignorados_sem_id: int = 0
 
     for _, r in df.iterrows():
         is_combo = bool(r.get("is_combo", False))
+        origem = str(r.get("origem", "")).strip().lower()
         id_sub = str(r.get("subscription_id", "")).strip()
         id_trans = str(r.get("transaction_id", "")).strip()
+        id_line = str(r.get("id_line_item", "")).strip()
         sku = str(r.get("sku", "")).strip()
 
+        # 1) Assinaturas
         if id_sub:
             registros_assinaturas.append(
                 {
@@ -5631,25 +5663,35 @@ def registrar_envios(
                     "registro_em": registro_em,
                 }
             )
-        elif is_combo and id_trans and sku:
-            # → COMBOS: granular por item (usa chave_dedup para dedup no Excel)
-            rec: dict[str, Any] = {
-                "chave_dedup": f"{id_trans}+{sku}",
-                "transaction_id": id_trans,
-                "sku": sku,
-                "registro_em": registro_em,
-            }
-            if tem_id_lote:
-                rec["id_lote"] = str(r.get("ID Lote", "")).strip()
-            registros_combos.append(rec)
-        elif (not is_combo) and id_trans:
-            # → PRODUTOS (legacy)
+            continue
+
+        # 2) Combos → usar id_line_item quando existir (prioritário)
+        if is_combo and sku:
+            chosen_id = id_line if id_line else id_trans
+            if chosen_id:
+                rec: dict[str, Any] = {
+                    "chave_dedup": f"{chosen_id}+{sku}",
+                    "transaction_id": chosen_id,  # ← fica como id_line_item quando existir
+                    "sku": sku,
+                    "registro_em": registro_em,
+                }
+                if tem_id_lote:
+                    rec["id_lote"] = str(r.get("ID Lote", "")).strip()
+                registros_combos.append(rec)
+            else:
+                ignorados_sem_id += 1
+            continue
+
+        # 3) Produtos (legacy) — NÃO registrar avulsos da Shopify
+        if (not is_combo) and id_trans and origem != "shopify":
             rec = {"transaction_id": id_trans, "registro_em": registro_em}
             if tem_id_lote:
                 rec["id_lote"] = str(r.get("ID Lote", "")).strip()
             registros_produtos.append(rec)
-        else:
-            ignorados_sem_trans += 1
+            continue
+
+        # 4) Demais casos ignorados
+        ignorados_sem_id += 1
 
     if not (registros_assinaturas or registros_produtos or registros_combos):
         comunicador_global.mostrar_mensagem.emit("aviso", "Aviso", "Nenhum registro válido encontrado para salvar.")
@@ -5673,8 +5715,8 @@ def registrar_envios(
         msg += f"\n  . Produtos: {len(registros_produtos)}"
     if registros_combos:
         msg += f"\n  . Combos (itens): {len(registros_combos)}"
-    if ignorados_sem_trans:
-        msg += f"\n  . Ignorados (sem transaction_id): {ignorados_sem_trans}"
+    if ignorados_sem_id:
+        msg += f"\n  . Ignorados (sem id_line_item/transaction_id ou avulsos Shopify): {ignorados_sem_id}"
     comunicador_global.mostrar_mensagem.emit("info", "Registro concluído", msg)
 
 
@@ -7408,8 +7450,13 @@ class ColetarPedidosShopify(QRunnable):
         - Se não for combo: [{'sku', 'quantity', 'line_item_id'}]
         - Se combo indisponível e mapeado: [{'sku', 'quantity', 'line_item_id', 'combo_indisponivel': True}]
         - Se combo normal: componentes multiplicados, todos com o MESMO 'line_item_id' do line item original.
-        (Agora anotando unit_price_hint: 0.0 p/ brinde; {"_combo_divisor": N} p/ não-brinde)
+          (anota unit_price_hint: 0.0 p/ brinde; {"_combo_divisor": N} p/ não-brinde)
         """
+
+        def _to_bool(v: Any) -> bool:
+            s = str(v).strip().lower()
+            return s in {"true", "1", "s", "sim", "y", "yes"}
+
         itens_expandidos: list[dict[str, Any]] = []
         li_edges = cast(list[dict[str, Any]], (pedido.get("lineItems") or {}).get("edges", []) or [])
         for li_edge in li_edges:
@@ -7442,7 +7489,7 @@ class ColetarPedidosShopify(QRunnable):
 
             # combo → aplicar regra de pré-venda (não desmembrar)
             mapeado = bool(info.get("guru_ids")) and bool(info.get("shopify_ids"))
-            indisponivel = bool(info.get("indisponivel"))
+            indisponivel = _to_bool(info.get("indisponivel", ""))  # ← parse seguro
             if indisponivel and mapeado:
                 itens_expandidos.append(
                     {
@@ -7507,7 +7554,7 @@ class ColetarPedidosShopify(QRunnable):
                 )
                 continue
 
-            # === NOVO: calcular divisor efetivo do combo e anotar unit_price_hint por componente ===
+            # === calcular divisor efetivo do combo e anotar unit_price_hint por componente ===
             try:
                 # aceita divisor como int ou string numérica; válido se >= 1
                 cfg_div_raw = info.get("divisor", None)
@@ -7533,7 +7580,6 @@ class ColetarPedidosShopify(QRunnable):
 
                 # adiciona os componentes multiplicando pela quantidade do line item (qty_li),
                 # marcando a dica de preço por item:
-                somente_brindes = True
                 for comp_sku, comp_qty in comp_norm:
                     quantidade_total = comp_qty * qty_li
                     if quantidade_total <= 0:
@@ -7543,7 +7589,6 @@ class ColetarPedidosShopify(QRunnable):
                         unit_price_hint: Any = 0.0
                     else:
                         unit_price_hint = {"_combo_divisor": divisor_efetivo}
-                        somente_brindes = False
 
                     itens_expandidos.append(
                         {
@@ -7552,15 +7597,11 @@ class ColetarPedidosShopify(QRunnable):
                             "from_combo": sku_li,
                             "is_combo": True,
                             "line_item_id": line_item_id,  # ✅ mesmo id p/ todas as linhas do combo
-                            "unit_price_hint": unit_price_hint,  # ← usado depois no cálculo de preço
+                            "unit_price_hint": unit_price_hint,
                         }
                     )
-
-                # se por acaso todos forem brindes, já garantimos unit_price_hint=0.0 em todos
-                # (nada extra a fazer; este bloco só indica explicitamente a intenção)
-                _ = somente_brindes  # no-op; mantido para clareza
             except Exception:
-                # se algo falhar, mantém o comportamento anterior (sem hints)
+                # fallback sem hints
                 for comp_sku, comp_qty in comp_norm:
                     quantidade_total = comp_qty * qty_li
                     if quantidade_total <= 0:
@@ -7571,7 +7612,7 @@ class ColetarPedidosShopify(QRunnable):
                             "quantity": quantidade_total,
                             "from_combo": sku_li,
                             "is_combo": True,
-                            "line_item_id": line_item_id,  # ✅ mesmo id p/ todas as linhas do combo
+                            "line_item_id": line_item_id,
                         }
                     )
 
@@ -7631,8 +7672,27 @@ class ColetarPedidosShopify(QRunnable):
                 createdAt
                 displayFulfillmentStatus
                 currentTotalDiscountsSet { shopMoney { amount } }
-                customer { email firstName lastName }
-                shippingAddress { name address1 address2 city zip provinceCode phone }
+                customer { email firstName lastName }  # mantido se você usa nome/email
+                shippingAddress {
+                  name
+                  address1
+                  address2
+                  city
+                  zip
+                  provinceCode
+                  phone
+                }
+                billingAddress {
+                  name
+                  firstName
+                  lastName
+                  address1
+                  address2
+                  city
+                  zip
+                  provinceCode
+                  phone
+                }
                 shippingLine { discountedPriceSet { shopMoney { amount } } }
                 lineItems(first: 10) {
                   edges {
@@ -7676,6 +7736,28 @@ class ColetarPedidosShopify(QRunnable):
             "Content-Type": "application/json",
             "X-Shopify-Access-Token": settings.SHOPIFY_TOKEN,
         }
+
+        # helpers locais para fallback de endereço
+        def _is_valid_addr(a: Mapping[str, Any]) -> bool:
+            return bool((a or {}).get("address1") or (a or {}).get("city") or (a or {}).get("zip"))
+
+        def _coalesce_shipping_or_billing(p: Mapping[str, Any]) -> dict[str, Any]:
+            ship = cast(dict[str, Any], p.get("shippingAddress") or {}) or {}
+            bill = cast(dict[str, Any], p.get("billingAddress") or {}) or {}
+            if _is_valid_addr(ship):
+                # completa com billing se faltar phone/nome
+                if not ship.get("phone") and bill.get("phone"):
+                    ship["phone"] = bill.get("phone")
+                if not ship.get("name"):
+                    nome_b = (bill.get("name") or "").strip()
+                    if not nome_b:
+                        fn = (bill.get("firstName") or "").strip()
+                        ln = (bill.get("lastName") or "").strip()
+                        nome_b = f"{fn} {ln}".strip()
+                    if nome_b:
+                        ship["name"] = nome_b
+                return ship
+            return bill
 
         while True:
             if cancelador is not None and cancelador.is_set():
@@ -7784,6 +7866,14 @@ class ColetarPedidosShopify(QRunnable):
                 pedido = cast(Pedido, edge.get("node", {}))
                 if not pedido:
                     continue
+
+                # ⬇️ Fallback de endereço: shippingAddress válido ou billingAddress
+                try:
+                    endereco_resolvido = _coalesce_shipping_or_billing(pedido)
+                    if endereco_resolvido:
+                        pedido["shippingAddress"] = endereco_resolvido  # mantém interface do restante do pipeline
+                except Exception:
+                    pass
 
                 # --- EXPANSÃO DE ITENS: prioridade por SKU e regra de combo ---
                 skus_info = cast(dict[str, Any], self.estado.get("skus_info", {}))
@@ -8332,6 +8422,14 @@ def montar_planilha_shopify(
             if alvo in nome_produto.lower():
                 ids_filtrados.update(map(str, dados.get("shopify_ids", [])))
 
+    # índice auxiliar: SKU -> nome
+    def nome_por_sku(sku: str) -> str:
+        sku_u = (sku or "").strip().upper()
+        for nome, dados in skus_info.items():
+            if str(dados.get("sku", "")).strip().upper() == sku_u:
+                return nome
+        return sku  # fallback: usa o próprio SKU
+
     linhas_geradas: list[dict[str, Any]] = []
     for pedido in pedidos:
         # --- dados básicos do pedido (robustos a None) ---
@@ -8398,6 +8496,9 @@ def montar_planilha_shopify(
 
         # --- processar line items ---
         line_edges = (pedido.get("lineItems") or {}).get("edges", [])
+        # pega itens expandidos que o coletor já montou
+        itens_expandidos_all = list(pedido.get("itens_expandidos") or [])
+
         for item_edge in line_edges:
             item = item_edge.get("node") or {}
             product_id_raw = (item.get("product") or {}).get("id", "")
@@ -8408,7 +8509,7 @@ def montar_planilha_shopify(
             if ids_filtrados and product_id not in ids_filtrados:
                 continue
 
-            # Descobre nome do produto e SKU a partir do mapeamento do skus.json
+            # Descobre nome do produto e SKU a partir do mapeamento do skus.json (para o line item original)
             nome_produto = ""
             sku_item = ""
             for nome_local, dados in skus_info.items():
@@ -8421,7 +8522,7 @@ def montar_planilha_shopify(
             valor_total_linha = float(
                 ((item.get("discountedTotalSet") or {}).get("shopMoney") or {}).get("amount") or 0
             )
-            valor_unitario: float = round(valor_total_linha / base_qtd, 2) if base_qtd else 0.0
+            valor_unit_line: float = round(valor_total_linha / base_qtd, 2) if base_qtd else 0.0
             id_line_item: str = str(item.get("id", "")).split("/")[-1]
 
             # Quantidade a gerar conforme o modo selecionado
@@ -8429,64 +8530,160 @@ def montar_planilha_shopify(
                 remaining = int(remaining_por_line.get(id_line_item, 0))
                 if remaining <= 0:
                     continue
-                qtd_a_gerar = remaining
+                qtd_a_gerar_line = remaining
             else:
-                qtd_a_gerar = base_qtd if base_qtd > 0 else 0
+                qtd_a_gerar_line = base_qtd if base_qtd > 0 else 0
 
-            # Flag de disponibilidade (usa regra local)
-            indisponivel_flag = "S" if produto_indisponivel(nome_produto) else "N"
+            # Itens expandidos deste line_item (se houver)
+            itens_expandidos = [it for it in itens_expandidos_all if str(it.get("line_item_id", "")) == id_line_item]
 
-            for _ in range(qtd_a_gerar):
-                linha: dict[str, Any] = {
-                    "Número pedido": pedido.get("name", ""),
-                    "Nome Comprador": nome_cliente,
-                    "Data": local_now().strftime("%d/%m/%Y"),
-                    "CPF/CNPJ Comprador": "",
-                    "Endereço Comprador": endereco.get("address1", ""),
-                    "Bairro Comprador": endereco.get("district", ""),
-                    "Número Comprador": endereco.get("number", ""),
-                    "Complemento Comprador": endereco.get("address2", ""),
-                    "CEP Comprador": endereco.get("zip", ""),
-                    "Cidade Comprador": endereco.get("city", ""),
-                    "UF Comprador": endereco.get("provinceCode", ""),
-                    "Telefone Comprador": telefone,
-                    "Celular Comprador": telefone,
-                    "E-mail Comprador": email,
-                    "Produto": nome_produto,
-                    "SKU": sku_item,
-                    "Un": "UN",
-                    "Quantidade": "1",
-                    "Valor Unitário": f"{valor_unitario:.2f}".replace(".", ","),
-                    "Valor Total": f"{valor_unitario:.2f}".replace(".", ","),
-                    "Total Pedido": "",
-                    "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
-                    "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
-                    "Outras despesas": "",
-                    "Nome Entrega": nome_cliente,
-                    "Endereço Entrega": endereco.get("address1", ""),
-                    "Número Entrega": endereco.get("number", ""),
-                    "Complemento Entrega": endereco.get("address2", ""),
-                    "Cidade Entrega": endereco.get("city", ""),
-                    "UF Entrega": endereco.get("provinceCode", ""),
-                    "CEP Entrega": endereco.get("zip", ""),
-                    "Bairro Entrega": endereco.get("district", ""),
-                    "Transportadora": "",
-                    "Serviço": "",
-                    "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
-                    "Observações": "",
-                    "Qtd Parcela": "",
-                    "Data Prevista": "",
-                    "Vendedor": "",
-                    "Forma Pagamento": "",
-                    "ID Forma Pagamento": "",
-                    "transaction_id": transaction_id,
-                    "id_line_item": id_line_item,
-                    "id_produto": product_id,
-                    "indisponivel": indisponivel_flag,
-                    "Precisa Contato": "SIM",
-                    "Data Pedido": (pedido.get("createdAt") or "")[:10],
-                }
-                linhas_geradas.append(linha)
+            if itens_expandidos:
+                # === USAR COMPONENTES EXPANDIDOS ===
+                # Preço por combo (1 unidade do line item)
+                total_por_combo = (valor_total_linha / base_qtd) if base_qtd else 0.0
+
+                for it in itens_expandidos:
+                    comp_sku = str(it.get("sku", "")).strip()
+                    if not comp_sku:
+                        continue
+
+                    # quantidade total do componente considerando remaining/base_qtd
+                    qtd_total_component = 0
+                    try:
+                        qtd_por_combo = int(it.get("quantity", 0)) // max(1, base_qtd)
+                    except Exception:
+                        qtd_por_combo = 1
+                    qtd_total_component = qtd_por_combo * qtd_a_gerar_line
+
+                    if qtd_total_component <= 0:
+                        continue
+
+                    # nome e indisponível por componente
+                    nome_comp = nome_por_sku(comp_sku)
+                    indisp_comp = "S" if produto_indisponivel(nome_comp, sku=comp_sku) else "N"
+
+                    # preço unitário do componente
+                    unit_hint = it.get("unit_price_hint", None)
+                    if unit_hint == 0.0:
+                        valor_unit_comp = 0.0
+                    elif isinstance(unit_hint, dict) and "_combo_divisor" in unit_hint:
+                        div = int(unit_hint.get("_combo_divisor") or 1)
+                        div = max(1, div)
+                        valor_unit_comp = round((total_por_combo / div), 2)
+                    else:
+                        # fallback: reparte igualmente por qtd_por_combo se desejar, ou usa do line item
+                        valor_unit_comp = valor_unit_line
+
+                    # gera 1 linha por unidade
+                    for _ in range(qtd_total_component):
+                        linha: dict[str, Any] = {
+                            "Número pedido": pedido.get("name", ""),
+                            "Nome Comprador": nome_cliente,
+                            "Data": local_now().strftime("%d/%m/%Y"),
+                            "CPF/CNPJ Comprador": "",
+                            "Endereço Comprador": endereco.get("address1", ""),
+                            "Bairro Comprador": endereco.get("district", ""),
+                            "Número Comprador": endereco.get("number", ""),
+                            "Complemento Comprador": endereco.get("address2", ""),
+                            "CEP Comprador": endereco.get("zip", ""),
+                            "Cidade Comprador": endereco.get("city", ""),
+                            "UF Comprador": endereco.get("provinceCode", ""),
+                            "Telefone Comprador": telefone,
+                            "Celular Comprador": telefone,
+                            "E-mail Comprador": email,
+                            "Produto": nome_comp,
+                            "SKU": comp_sku,
+                            "Un": "UN",
+                            "Quantidade": "1",
+                            "Valor Unitário": f"{valor_unit_comp:.2f}".replace(".", ","),
+                            "Valor Total": f"{valor_unit_comp:.2f}".replace(".", ","),
+                            "Total Pedido": "",
+                            "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
+                            "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
+                            "Outras despesas": "",
+                            "Nome Entrega": nome_cliente,
+                            "Endereço Entrega": endereco.get("address1", ""),
+                            "Número Entrega": endereco.get("number", ""),
+                            "Complemento Entrega": endereco.get("address2", ""),
+                            "Cidade Entrega": endereco.get("city", ""),
+                            "UF Entrega": endereco.get("provinceCode", ""),
+                            "CEP Entrega": endereco.get("zip", ""),
+                            "Bairro Entrega": endereco.get("district", ""),
+                            "Transportadora": "",
+                            "Serviço": "",
+                            "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
+                            "Observações": "",
+                            "Qtd Parcela": "",
+                            "Data Prevista": "",
+                            "Vendedor": "",
+                            "Forma Pagamento": "",
+                            "ID Forma Pagamento": "",
+                            "transaction_id": transaction_id,
+                            "id_line_item": id_line_item,
+                            "id_produto": product_id,  # id do produto do combo original (ok)
+                            "indisponivel": indisp_comp,
+                            "Precisa Contato": "SIM",
+                            "Data Pedido": (pedido.get("createdAt") or "")[:10],
+                            # flags úteis
+                            "is_combo": bool(it.get("is_combo", False)),
+                            "from_combo": it.get("from_combo", ""),
+                        }
+                        linhas_geradas.append(linha)
+            else:
+                # === FALLBACK: SEM EXPANSÃO → usa o line item original ===
+                indisponivel_flag = "S" if produto_indisponivel(nome_produto) else "N"
+                for _ in range(qtd_a_gerar_line):
+                    linha: dict[str, Any] = {
+                        "Número pedido": pedido.get("name", ""),
+                        "Nome Comprador": nome_cliente,
+                        "Data": local_now().strftime("%d/%m/%Y"),
+                        "CPF/CNPJ Comprador": "",
+                        "Endereço Comprador": endereco.get("address1", ""),
+                        "Bairro Comprador": endereco.get("district", ""),
+                        "Número Comprador": endereco.get("number", ""),
+                        "Complemento Comprador": endereco.get("address2", ""),
+                        "CEP Comprador": endereco.get("zip", ""),
+                        "Cidade Comprador": endereco.get("city", ""),
+                        "UF Comprador": endereco.get("provinceCode", ""),
+                        "Telefone Comprador": telefone,
+                        "Celular Comprador": telefone,
+                        "E-mail Comprador": email,
+                        "Produto": nome_produto,
+                        "SKU": sku_item,
+                        "Un": "UN",
+                        "Quantidade": "1",
+                        "Valor Unitário": f"{valor_unit_line:.2f}".replace(".", ","),
+                        "Valor Total": f"{valor_unit_line:.2f}".replace(".", ","),
+                        "Total Pedido": "",
+                        "Valor Frete Pedido": f"{valor_frete:.2f}".replace(".", ","),
+                        "Valor Desconto Pedido": f"{valor_desconto:.2f}".replace(".", ","),
+                        "Outras despesas": "",
+                        "Nome Entrega": nome_cliente,
+                        "Endereço Entrega": endereco.get("address1", ""),
+                        "Número Entrega": endereco.get("number", ""),
+                        "Complemento Entrega": endereco.get("address2", ""),
+                        "Cidade Entrega": endereco.get("city", ""),
+                        "UF Entrega": endereco.get("provinceCode", ""),
+                        "CEP Entrega": endereco.get("zip", ""),
+                        "Bairro Entrega": endereco.get("district", ""),
+                        "Transportadora": "",
+                        "Serviço": "",
+                        "Tipo Frete": "0 - Frete por conta do Remetente (CIF)",
+                        "Observações": "",
+                        "Qtd Parcela": "",
+                        "Data Prevista": "",
+                        "Vendedor": "",
+                        "Forma Pagamento": "",
+                        "ID Forma Pagamento": "",
+                        "transaction_id": transaction_id,
+                        "id_line_item": id_line_item,
+                        "id_produto": product_id,
+                        "indisponivel": indisponivel_flag,
+                        "Precisa Contato": "SIM",
+                        "Data Pedido": (pedido.get("createdAt") or "")[:10],
+                        "is_combo": False,
+                    }
+                    linhas_geradas.append(linha)
 
     if linhas_geradas:
         df_novo = pd.DataFrame(linhas_geradas)
