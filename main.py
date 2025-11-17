@@ -5452,15 +5452,18 @@ def remover_pedidos_enviados() -> None:
         df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
     # helper para coalescer colunas por "nome lógico" (após normalização)
-    def col_series(_df: pd.DataFrame, logical_name: str, default: Any = "") -> pd.Series:
+    def col_series(_df: pd.DataFrame, logical_name: str, default: Any = "") -> pd.Series[Any]:
         cols = [c for c in _df.columns if c.strip().lower() == logical_name]
         if not cols:
+            # aqui o mypy já sabe que é Series[Any]
             return pd.Series([default] * len(_df), index=_df.index)
+
         if len(cols) == 1:
-            s = _df[cols[0]]
+            s: pd.Series[Any] = _df[cols[0]]
         else:
             # pega a 1ª não-nula na horizontal entre colunas duplicadas
-            s = _df[cols].bfill(axis=1).iloc[:, 0]
+            s = cast(pd.Series[Any], _df[cols].bfill(axis=1).iloc[:, 0])
+
         return s
 
     # aliases só na cópia de trabalho (após deduplicar colunas)
@@ -7472,7 +7475,7 @@ class ColetarPedidosShopify(QRunnable):
         - Se não for combo: [{'sku', 'quantity', 'line_item_id'}]
         - Se combo indisponível e mapeado: [{'sku', 'quantity', 'line_item_id', 'combo_indisponivel': True}]
         - Se combo normal: componentes multiplicados, todos com o MESMO 'line_item_id' do line item original.
-          (anota unit_price_hint: 0.0 p/ brinde; {"_combo_divisor": N} p/ não-brinde)
+        (anota unit_price_hint: 0.0 p/ brinde; {"_combo_divisor": N} p/ não-brinde)
         """
 
         def _to_bool(v: Any) -> bool:
@@ -7494,10 +7497,13 @@ class ColetarPedidosShopify(QRunnable):
                 continue
 
             info = self._buscar_info_por_sku(skus_info, sku_li)
-            tipo_info = str((info or {}).get("tipo", "")).strip().lower()
+            # normaliza para sempre ter um dict; isso tira o Optional da jogada para o mypy
+            info_dict: dict[str, Any] = info or {}
+
+            tipo_info = str(info_dict.get("tipo", "")).strip().lower()
 
             # não é combo
-            eh_combo = bool(info) and (tipo_info == "combo" or info.get("composto_de"))
+            eh_combo = bool(info_dict) and (tipo_info == "combo" or info_dict.get("composto_de"))
             if not eh_combo:
                 itens_expandidos.append(
                     {
@@ -7510,8 +7516,8 @@ class ColetarPedidosShopify(QRunnable):
                 continue
 
             # combo → aplicar regra de pré-venda (não desmembrar)
-            mapeado = bool(info.get("guru_ids")) and bool(info.get("shopify_ids"))
-            indisponivel = _to_bool(info.get("indisponivel", ""))  # ← parse seguro
+            mapeado = bool(info_dict.get("guru_ids")) and bool(info_dict.get("shopify_ids"))
+            indisponivel = _to_bool(info_dict.get("indisponivel", ""))  # ← parse seguro
             if indisponivel and mapeado:
                 itens_expandidos.append(
                     {
@@ -7525,7 +7531,7 @@ class ColetarPedidosShopify(QRunnable):
                 continue
 
             # desmembrar componentes → TODOS herdam o mesmo line_item_id
-            raw_comp = info.get("composto_de") or []
+            raw_comp = info_dict.get("composto_de") or []
 
             # Normaliza para lista de componentes "por combo" (sem multiplicar por qty_li ainda)
             if isinstance(raw_comp, str):
@@ -7557,7 +7563,10 @@ class ColetarPedidosShopify(QRunnable):
                             comp_qty = int(m.group(2))
 
                 else:
-                    logger.warning("componente_tipo_inesperado", extra={"tipo": type(comp).__name__, "combo": sku_li})
+                    logger.warning(
+                        "componente_tipo_inesperado",
+                        extra={"tipo": type(comp).__name__, "combo": sku_li},
+                    )
                     continue
 
                 if comp_sku:
@@ -7579,7 +7588,7 @@ class ColetarPedidosShopify(QRunnable):
             # === calcular divisor efetivo do combo e anotar unit_price_hint por componente ===
             try:
                 # aceita divisor como int ou string numérica; válido se >= 1
-                cfg_div_raw = info.get("divisor", None)
+                cfg_div_raw = info_dict.get("divisor", None)
                 cfg_div: int | None
                 if isinstance(cfg_div_raw, int):
                     cfg_div = cfg_div_raw if cfg_div_raw >= 1 else None
@@ -7592,7 +7601,8 @@ class ColetarPedidosShopify(QRunnable):
 
                 def _is_brinde(sku_: str) -> bool:
                     _inf = self._buscar_info_por_sku(skus_info, sku_) or {}
-                    return str(_inf.get("tipo", "")).strip().lower() == "brinde"
+                    _inf_dict: Mapping[str, Any] = _inf or {}
+                    return str(_inf_dict.get("tipo", "")).strip().lower() == "brinde"
 
                 total_nao_brinde = sum(q for (s, q) in comp_norm if not _is_brinde(s))
                 if cfg_div is not None:
