@@ -480,7 +480,8 @@ _DUR_LABEL_TO_MONTHS: dict[str, int] = {
     # duração (rotulo → meses)
     "mensal": 1,
     "bimestral": 2,
-    "semestral": 6,  # adição do usuário
+    "trimestral": 3,
+    "semestral": 6,
     "anual": 12,
     "18meses": 18,  # adição do usuário
     "bianual": 24,
@@ -583,6 +584,7 @@ def mapear_assinaturas(
     assinaturas: dict[str, list[str]] = {
         "mensal": [],
         "bimestral": [],
+        "trimestral": [],
         "semestral": [],
         "anual": [],
         "18meses": [],
@@ -679,7 +681,9 @@ def iniciar_mapeamento_produtos_guru(
             self.widget_assinatura = QWidget()
             linha_assin: QHBoxLayout = QHBoxLayout(self.widget_assinatura)
             self.combo_duracao = QComboBox()
-            self.combo_duracao.addItems(["mensal", "bimestral", "semestral", "anual", "18meses", "bianual", "trianual"])
+            self.combo_duracao.addItems(
+                ["mensal", "bimestral", "trimestral", "semestral", "anual", "18meses", "bianual", "trianual"]
+            )
             linha_assin.addWidget(QLabel("Duração do plano:"))
             linha_assin.addWidget(self.combo_duracao)
 
@@ -794,6 +798,7 @@ def iniciar_mapeamento_produtos_guru(
             DUR_LABEL_TO_MONTHS = {
                 "mensal": 1,
                 "bimestral": 2,
+                "trimestral": 3,
                 "semestral": 6,
                 "anual": 12,
                 "18meses": 18,
@@ -1926,6 +1931,7 @@ ASSINATURAS, GURU_META = mapear_assinaturas(skus_info)
 
 ASSINATURAS_MENSAIS = ASSINATURAS.get("mensal", [])
 ASSINATURAS_BIMESTRAIS = ASSINATURAS.get("bimestral", [])
+ASSINATURAS_TRIMESTRAIS = ASSINATURAS.get("trimestral", [])
 ASSINATURAS_ANUAIS = ASSINATURAS.get("anual", [])
 ASSINATURAS_SEMESTRAIS = ASSINATURAS.get("semestral", [])
 ASSINATURAS_18MESES = ASSINATURAS.get("18meses", [])
@@ -2235,6 +2241,7 @@ def exibir_resumo_coleta_guru(
         TIPOS: list[tuple[str, list[str]]] = [
             ("mensais", ["mensais", "mensal"]),
             ("bimestrais", ["bimestrais", "bimestral"]),
+            ("trimestrais", ["trimestrais", "trimestral"]),
             ("semestrais", ["semestrais", "semestral"]),
             ("anuais", ["anuais", "anual"]),
             ("18meses", ["18meses", "18meses"]),
@@ -3088,6 +3095,7 @@ def mapear_periodicidade_assinaturas(
     ids_por_tipo: dict[str, list[str]] = {
         "mensais": [],
         "bimestrais": [],
+        "trimestrais": [],
         "semestrais": [],
         "anuais": [],
         "18meses": [],
@@ -3122,6 +3130,7 @@ def mapear_periodicidade_assinaturas(
             return {
                 1: "mensais",
                 2: "bimestrais",
+                3: "trimestrais",
                 6: "semestrais",
                 12: "anuais",
                 18: "18meses",
@@ -3145,6 +3154,7 @@ def mapear_periodicidade_assinaturas(
         mapa_tipo = {
             "mensal": "mensais",
             "bimestral": "bimestrais",
+            "trimestrais": "trimestrais",
             "semestral": "semestrais",
             "anual": "anuais",
             "18meses": "18meses",
@@ -3794,6 +3804,7 @@ def montar_planilha_vendas_guru(
             "18meses": "18meses",
             "bianual": "bianuais",
             "trianual": "trianuais",
+            "trimestral": "trimestrais",
             "bimestral": "bimestrais",
             "mensal": "mensais",
         }
@@ -4337,6 +4348,8 @@ def aplicar_regras_assinaturas(
             base.append("Assinatura Anual")
         elif tipo == "bimestrais":
             base.append("Assinatura Bimestral")
+        elif tipo == "trimestrais":
+            base.append("Assinatura Trimestral")
         elif tipo == "mensais":
             base.append("Assinatura Mensal")
         out: set[str] = set()
@@ -4359,7 +4372,7 @@ def aplicar_regras_assinaturas(
         if not lista:
             return True, 0
 
-        tokens_genericos = {"semestral", "18meses", "anual", "2 anos", "3 anos", "mensal", "bimestral"}
+        tokens_genericos = {"semestral", "18meses", "anual", "2 anos", "3 anos", "mensal", "bimestral", "trimestral"}
         best = -1
         casou = False
         alvo_concat = " ".join(sorted(labels_alvo))
@@ -4746,6 +4759,8 @@ def calcular_valores_pedidos(
         divisor = 12 if periodicidade == "mensal" else 6
     elif tipo_assinatura == "semestrais":
         divisor = 6 if periodicidade == "mensal" else 3
+    elif tipo_assinatura == "trimestrais":
+        divisor = 3 if periodicidade == "mensal" else 1
     elif tipo_assinatura == "bimestrais":
         divisor = 2 if periodicidade == "mensal" else 1
     elif tipo_assinatura == "mensais":
@@ -5043,6 +5058,8 @@ def importar_planilha_pedidos_guru() -> None:
             return "18meses"
         if "semestral" in s:
             return "semestrais"
+        if "trimestral" in s:
+            return "trimestrais"
         if "bimestral" in s:
             return "bimestrais"
         if "mensal" in s:
@@ -5059,6 +5076,9 @@ def importar_planilha_pedidos_guru() -> None:
         ("trianuais", "bimestral"): 1440,
         ("18meses", "mensal"): 1440,
         ("semestrais", "mensal"): 480,
+        ("trimestrais", "mensal"): 294,
+        ("bimestrais", "bimestral"): 98,
+        ("mensais", "mensal"): 98,
     }
 
     def divisor_para(tipo_assinatura: str, periodicidade: str) -> int:
@@ -5074,6 +5094,8 @@ def importar_planilha_pedidos_guru() -> None:
             return 12 if per == "mensal" else 6
         if ta == "semestrais":
             return 6 if per == "mensal" else 3
+        if ta == "trimestrais":
+            return 3 if per == "mensal" else 1
         if ta == "bimestrais":
             return 2 if per == "mensal" else 1
         if ta == "mensais":

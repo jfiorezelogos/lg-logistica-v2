@@ -1,0 +1,5 @@
+{
+  "output_dir": "out",
+  "dry_run": true,
+  "max_rows": 1000
+}

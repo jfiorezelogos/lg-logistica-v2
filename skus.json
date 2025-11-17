@@ -221,10 +221,12 @@
     "Vida dos Grandes Filósofos": {
         "sku": "L010A",
         "peso": 0.498,
-        "guru_ids": [
-            "a01ab6a3-416b-448c-b5d0-d6f8f5970c6d"
+        "guru_ids": [],
+        "shopify_ids": [
+            8597325742270,
+            8597325840574,
+            8597326004414
         ],
-        "shopify_ids": [],
         "tipo": "produto",
         "composto_de": [],
         "indisponivel": true
@@ -238,7 +240,7 @@
         "shopify_ids": [],
         "tipo": "produto",
         "composto_de": [],
-        "indisponivel": true
+        "indisponivel": false
     },
     "Assinatura Anual (mensal) - mensal": {
         "tipo": "assinatura",

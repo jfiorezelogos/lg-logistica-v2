@@ -9,6 +9,7 @@ from typing import Literal
 
 # ---------------------------------------------------------------------
 # platformdirs (com fallback compatível se não estiver instalado)
+# (mantido por compatibilidade se for usado em outro lugar do projeto)
 # ---------------------------------------------------------------------
 try:
     from platformdirs import user_cache_dir, user_config_dir, user_data_dir, user_log_dir
@@ -128,30 +129,43 @@ def resource_path(rel: str | os.PathLike[str]) -> Path:
 
 
 # ---------------------------------------------------------------------
-# Diretórios por usuário
+# Diretórios "por app" (agora relativos à pasta do main/app_root)
 # ---------------------------------------------------------------------
 def user_config_dir_path() -> Path:
-    return Path(user_config_dir(APP_NAME, APP_AUTHOR, ensure_exists=True))
+    """
+    Diretório de configuração EDITÁVEL do app, relativo à pasta raiz da aplicação.
+    Ex.: <app_root>/Config
+    """
+    p = app_root() / "Config"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def user_data_dir_path() -> Path:
-    return Path(user_data_dir(APP_NAME, APP_AUTHOR, ensure_exists=True))
-
-
-def user_cache_dir_path() -> Path:
-    return Path(user_cache_dir(APP_NAME, APP_AUTHOR, ensure_exists=True))
+    """
+    Diretório de dados EDITÁVEIS do app, relativo à pasta raiz da aplicação.
+    Ex.: <app_root>/Data
+    """
+    p = app_root() / "Data"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def user_log_dir_path() -> Path:
-    return Path(user_log_dir(APP_NAME, APP_AUTHOR, ensure_exists=True))
+    """
+    Diretório de logs do app, relativo à pasta raiz da aplicação.
+    Ex.: <app_root>/Logs
+    """
+    p = app_root() / "Logs"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def ensure_dirs() -> None:
     """
-    Garante a existência dos diretórios de Config, Data, Cache e Logs do usuário.
+    Garante a existência dos diretórios de Config, Data e Logs do app.
     """
-    # Já criados via ensure_exists=True nas chamadas acima; ainda assim reforçamos:
-    for p in {user_config_dir_path(), user_data_dir_path(), user_cache_dir_path(), user_log_dir_path()}:
+    for p in {user_config_dir_path(), user_data_dir_path(), user_log_dir_path()}:
         p.mkdir(parents=True, exist_ok=True)
 
 
@@ -165,7 +179,7 @@ def env_path(key: str) -> Path | None:
 
 def default_log_file() -> Path:
     """
-    Caminho do arquivo de log rotativo no diretório de logs do usuário.
+    Caminho do arquivo de log rotativo no diretório de logs do app.
     Seguro para instalador (sem Program Files).
     """
     return user_log_dir_path() / "sistema.log"
@@ -173,7 +187,7 @@ def default_log_file() -> Path:
 
 def user_config_file(filename: str) -> Path:
     """
-    Caminho canônico de um arquivo de configuração EDITÁVEL do usuário,
+    Caminho canônico de um arquivo de configuração EDITÁVEL,
     ex.: user_config_file("config_ofertas.json")
     """
     return user_config_dir_path() / filename
@@ -183,7 +197,7 @@ def default_config_path() -> Path:
     """
     Localiza o config "principal" (config.json) seguindo ordem:
     1) Variável de ambiente LG_CONFIG_PATH (se existir e apontar para arquivo);
-    2) %LOCALAPPDATA%/Logos Editora/lg-logistica/Config/config.json (se existir);
+    2) <app_root>/Config/config.json (se existir);
     3) config.json empacotado junto do app (somente leitura).
     """
     p = env_path("LG_CONFIG_PATH")
@@ -200,7 +214,7 @@ def default_config_path() -> Path:
 def resolve_input_output_paths(cfg: Mapping[str, object]) -> tuple[Path, Path]:
     """
     Converte 'input_path' e 'output_dir' do config para paths absolutos e seguros.
-    - Se relativo: base = user_data_dir().
+    - Se relativo: base = user_data_dir_path() (ou seja, <app_root>/Data).
     - Garante criação de output_dir.
     """
     in_raw = str(cfg.get("input_path", "dados.csv")).strip()
@@ -220,7 +234,7 @@ def resolve_input_output_paths(cfg: Mapping[str, object]) -> tuple[Path, Path]:
 
 def resolve_output_dir_only(out_raw: str | os.PathLike[str]) -> Path:
     """
-    Converte 'output_dir' para path absoluto (base user_data_dir se relativo) e cria o diretório.
+    Converte 'output_dir' para path absoluto (base user_data_dir_path se relativo) e cria o diretório.
     """
     out_dir = Path(out_raw)
     if not out_dir.is_absolute():
@@ -233,10 +247,10 @@ def resolve_output_dir_only(out_raw: str | os.PathLike[str]) -> Path:
 # Conveniências para arquivos editáveis específicos
 # ---------------------------------------------------------------------
 def ofertas_config_path() -> Path:
-    """Caminho da cópia EDITÁVEL de config_ofertas.json no perfil do usuário."""
+    """Caminho da cópia EDITÁVEL de config_ofertas.json no diretório Config do app."""
     return user_config_file("config_ofertas.json")
 
 
 def skus_config_path() -> Path:
-    """Caminho da cópia EDITÁVEL de skus.json no perfil do usuário."""
+    """Caminho da cópia EDITÁVEL de skus.json no diretório Config do app."""
     return user_config_file("skus.json")
